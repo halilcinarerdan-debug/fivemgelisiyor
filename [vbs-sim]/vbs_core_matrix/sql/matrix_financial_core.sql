@@ -1157,3 +1157,163 @@ CREATE TABLE IF NOT EXISTS `matrix_splinter_cells` (
     CONSTRAINT `fk_matrix_splinter_cells_trap_house`
         FOREIGN KEY (`trap_house_id`) REFERENCES `matrix_trap_houses` (`id`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+
+-- =======================================================================
+-- ★ KAYNAK: sql/layer_underworld_expansion.sql (bu oturumda eklendi, birebir asagida)
+-- =======================================================================
+
+-- =====================================================================
+-- ★★★ YERALTI FİZİKSEL SAVAŞ + KARA TIP + SIZDIRILAN İSTİHBARAT
+-- GENİŞLEMESİ (7 katmanlı görev seti) ★★★
+-- Additive migration -- yukaridaki hicbir tablo/kolon DEGISTIRILMEZ.
+-- =====================================================================
+
+
+-- ---------------------------------------------------------------------
+-- [KATMAN 2] Legal Hospital / EMS Sizinti Döngüsü — matrix_player_state'e
+-- yara/balistik imza kolonlari.
+-- ---------------------------------------------------------------------
+ALTER TABLE `matrix_player_state`
+    ADD COLUMN IF NOT EXISTS `has_wound` TINYINT(1) NOT NULL DEFAULT 0;
+ALTER TABLE `matrix_player_state`
+    ADD COLUMN IF NOT EXISTS `wound_ballistic_id` VARCHAR(64) NULL;
+
+
+-- ---------------------------------------------------------------------
+-- [KATMAN 3/4] Arma-tarzi Bölgesel Bot Yaralanma/Etkisizleştirme +
+-- Kalıcı Uzuv Sakatlığı. Koma modu (status='comatose', ZATEN VAR OLAN
+-- withdrawal_index tetiği, bkz. server/bureau.lua) DEĞİŞTİRİLMEZ.
+-- ---------------------------------------------------------------------
+ALTER TABLE `matrix_bots`
+    ADD COLUMN IF NOT EXISTS `wound_zone` VARCHAR(16) NULL;
+ALTER TABLE `matrix_bots`
+    ADD COLUMN IF NOT EXISTS `leg_injury` FLOAT NOT NULL DEFAULT 0.0;
+ALTER TABLE `matrix_bots`
+    ADD COLUMN IF NOT EXISTS `head_injury` FLOAT NOT NULL DEFAULT 0.0;
+ALTER TABLE `matrix_bots`
+    ADD COLUMN IF NOT EXISTS `arm_injury` FLOAT NOT NULL DEFAULT 0.0;
+ALTER TABLE `matrix_bots`
+    ADD COLUMN IF NOT EXISTS `permanently_crippled` TINYINT(1) NOT NULL DEFAULT 0;
+ALTER TABLE `matrix_bots`
+    ADD COLUMN IF NOT EXISTS `installed_prosthetic` TINYINT(1) NOT NULL DEFAULT 0;
+-- Karaborsa Ameliyati / Trap House tedavisi kilit sayaci (12s tedavi /
+-- 24s Hayalet Cerrah ameliyati bu tek kolonu paylasir -- ayni "kilitli
+-- zaman damgasi" deseni ComaClock ILE AYNI felsefe, RAM yerine kalici).
+ALTER TABLE `matrix_bots`
+    ADD COLUMN IF NOT EXISTS `medical_lock_until` DATETIME NULL;
+
+
+-- ---------------------------------------------------------------------
+-- [KATMAN 3] Bölge kitapları (matrix_zone_ledger, ZATEN VAR OLAN) için
+-- denetim-uyarısı anomali oranı -- gövde yarası + Büro sting'i buraya
+-- yazar.
+-- ---------------------------------------------------------------------
+ALTER TABLE `matrix_zone_ledger`
+    ADD COLUMN IF NOT EXISTS `audit_anomaly_rate` FLOAT NOT NULL DEFAULT 0.0;
+
+
+-- ---------------------------------------------------------------------
+-- [KATMAN 5] Deterministik Taze-Kurulum Satıcı Dağılımı — sunucu ilk
+-- açılışta, server/DB adı + satıcı id'sinin sağlama toplamından türetilir
+-- (RNG YOK, bkz. server/underworld_network.lua ChecksumOf).
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `matrix_vendor_pool` (
+    `id`               INT          NOT NULL AUTO_INCREMENT,
+    `vendor_citizenid` VARCHAR(50)  NULL,
+    `coord_x`          FLOAT        NOT NULL,
+    `coord_y`          FLOAT        NOT NULL,
+    `coord_z`          FLOAT        NOT NULL,
+    `gang_loyalty`     FLOAT        NOT NULL DEFAULT 0.5,
+    `fear_index`       FLOAT        NOT NULL DEFAULT 0.3,
+    `status`           VARCHAR(32)  NOT NULL DEFAULT 'active',
+    PRIMARY KEY (`id`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+-- Satici tekilligi/istismar izi -- sabotajli silahlarin (jam_accumulator
+-- onceden yuksek) hangi saticidan gectigini kaydeder; ikinci bir tablo
+-- ACILMAZ, tek bayrak kolonu yeterlidir.
+ALTER TABLE `matrix_vendor_pool`
+    ADD COLUMN IF NOT EXISTS `compromised` TINYINT(1) NOT NULL DEFAULT 0;
+
+
+-- ---------------------------------------------------------------------
+-- [KATMAN 6] Parçalanmış İstihbarat Defteri + Karşı-İstihbarat Vetting.
+-- contact_ref: hangi somut satici/doktor kaydina (matrix_vendor_pool.id
+-- veya 'phantom_doctor') ait oldugunu belirtir -- literal spesifikasyon
+-- semasi (citizenid/contact_type/intel_fragments) KORUNUR, yalnizca
+-- discovered/compromised/contact_ref ADDITIVE olarak eklenir.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `matrix_fragmented_intel` (
+    `id`              INT          NOT NULL AUTO_INCREMENT,
+    `citizenid`       VARCHAR(50)  NOT NULL,
+    `contact_type`    VARCHAR(50)  NOT NULL,
+    `intel_fragments` FLOAT        DEFAULT 0.0,
+    PRIMARY KEY (`id`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+ALTER TABLE `matrix_fragmented_intel`
+    ADD COLUMN IF NOT EXISTS `contact_ref` VARCHAR(64) NULL;
+ALTER TABLE `matrix_fragmented_intel`
+    ADD COLUMN IF NOT EXISTS `discovered` TINYINT(1) NOT NULL DEFAULT 0;
+ALTER TABLE `matrix_fragmented_intel`
+    ADD COLUMN IF NOT EXISTS `compromised` TINYINT(1) NOT NULL DEFAULT 0;
+ALTER TABLE `matrix_fragmented_intel`
+    ADD COLUMN IF NOT EXISTS `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP;
+
+
+-- ---------------------------------------------------------------------
+-- [KATMAN 7] Düşman Çete Mahalleleri + Sıfır-Toplam Yağma Motoru +
+-- Balistik Suç Yükleme (Frame-Up). stash_id: matrix_trap_stash_<id> ILE
+-- AYNI ox_inventory RegisterStash disiplini -- ikinci bir kalicilik
+-- kaynagi ACILMAZ.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `matrix_gang_hoods` (
+    `id`           INT          NOT NULL AUTO_INCREMENT,
+    `hood_label`   VARCHAR(100) NOT NULL,
+    `control_ratio` FLOAT       NOT NULL DEFAULT 1.0,
+    `stash_id`     VARCHAR(64)  NULL,
+    PRIMARY KEY (`id`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+ALTER TABLE `matrix_gang_hoods`
+    ADD COLUMN IF NOT EXISTS `coord_x` FLOAT NOT NULL DEFAULT 0.0;
+ALTER TABLE `matrix_gang_hoods`
+    ADD COLUMN IF NOT EXISTS `coord_y` FLOAT NOT NULL DEFAULT 0.0;
+ALTER TABLE `matrix_gang_hoods`
+    ADD COLUMN IF NOT EXISTS `coord_z` FLOAT NOT NULL DEFAULT 0.0;
+ALTER TABLE `matrix_gang_hoods`
+    ADD COLUMN IF NOT EXISTS `nearest_trap_house_id` INT NULL;
+ALTER TABLE `matrix_gang_hoods`
+    ADD COLUMN IF NOT EXISTS `loot_opened_at` DATETIME NULL;
+ALTER TABLE `matrix_gang_hoods`
+    ADD COLUMN IF NOT EXISTS `loot_compound_ticks` INT NOT NULL DEFAULT 0;
+
+
+-- =====================================================================
+-- ★ KATMAN 21: ACIMASIZ DIAGNOSTICS LABORATUVARI -- 100 eszamanli async
+-- satis stres testinin (server/matrix_diagnostics.lua RunConcurrencyStressCheck)
+-- yazdigi kayitlar icin, CANLI ekonomi tablolarindan TAMAMEN izole,
+-- tani-yalnizca bir gunluk. Her calistirmadan sonra run_token'a gore
+-- silinir -- kalici veri BIRIKTIRMEZ.
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS `matrix_diagnostics_stress_log` (
+    `id`           INT AUTO_INCREMENT,
+    `run_token`    VARCHAR(64) NOT NULL,
+    `worker_index` INT         NOT NULL,
+    `removed_ok`   TINYINT     NOT NULL DEFAULT 0,
+    `created_at`   DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    KEY `idx_run_token` (`run_token`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+
+-- =====================================================================
+-- DOĞRULAMA SORGUSU (opsiyonel — bu dosya çalıştırıldıktan sonra 4 dönmeli)
+-- =====================================================================
+-- SELECT COUNT(*) AS underworld_expansion_table_count
+-- FROM information_schema.tables
+-- WHERE table_schema = DATABASE()
+--   AND table_name IN (
+--       'matrix_vendor_pool',
+--       'matrix_fragmented_intel',
+--       'matrix_gang_hoods',
+--       'matrix_diagnostics_stress_log'
+--   );

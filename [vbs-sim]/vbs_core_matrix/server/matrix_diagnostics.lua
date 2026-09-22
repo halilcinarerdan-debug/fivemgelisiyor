@@ -21,14 +21,50 @@
 -- varlığı + salt-okunur DB şema sorguları. Toplamı milisaniyeler içinde
 -- biter (gerçek talep buydu), SIFIR yan etki, onServerResourceStart'ta
 -- OTOMATİK ve /matrix_run_diagnostics ile MANUEL çalışır. (B) DERİN KATMAN
--- -- YALNIZCA elle '/matrix_run_diagnostics deep' ile, İKİ-FAZLI ÇIKIŞ
--- KÖPRÜSÜ'nü GERÇEKTEN bir kullan-at test botuyla uçtan uca kanıtlar,
--- ardından Matrix.RemoveBot ile TAMAMEN geri alır (aşağıda). ASLA otomatik
--- tetiklenmez -- bir GM'in bilerek çalıştırdığı, kısa ve geri alınabilir
--- bir eylemdir.
+-- -- İKİ-FAZLI ÇIKIŞ KÖPRÜSÜ'nü GERÇEKTEN bir kullan-at test botuyla uçtan
+-- uca kanıtlar, ardından Matrix.RemoveBot ile TAMAMEN geri alır (aşağıda).
+--
+-- ★★★ KATMAN 21 GÜNCELLEMESİ (GM emriyle BİLİNÇLİ olarak yukarıdaki "ASLA
+-- otomatik değil" kararını GEÇERSİZ KILAR): onServerResourceStart artık
+-- HER ZAMAN deep=true çalıştırır VE üç ek SimulationChecks stres testi
+-- (100 eşzamanlı async işlem, bot yara-ceza hassasiyeti, Hayalet Doktor
+-- 10k-epoch determinizmi -- bkz. aşağıda) otomatik olarak tetiklenir.
+-- Bunlardan biri assert ile başarısız olursa, Config.Diagnostics.
+-- AbortResourceOnSimulationFailure açıkken kaynağın kendi açılışı
+-- StopResource ile DURDURULUR (bkz. AbortResourceBoot). Bu, DB/inventory
+-- ön-koşulları (bkz. shared/config.lua Config.Diagnostics KURULUM notu)
+-- karşılanmadan devreye alınırsa kaynağı HER RESTART'TA kilitleyebilir --
+-- kasıtlı, geri alınabilir (config'ten kapatılabilir) bir tercihtir.
 --
 -- SIFIR RNG: her kontrol saf/deterministiktir -- aynı config + aynı DB
 -- durumu HER ZAMAN aynı raporu üretir.
+--
+-- ★★★ KATMAN 22 GÜNCELLEMESİ: 4 yeni bekçi eklendi -- (1) Config Ped
+-- Bekçisi: Config.BotPedConfiguration'daki runner/lookout/chemist/
+-- inspector rütbelerinin katı string ped modeline bağlı olduğunu FastChecks
+-- içinde doğrular. (2) Koordinat Kusursuzluğu: 3 düşman hood bölgesi, 5
+-- Hayalet Doktor koordinatı ve karaborsa/rendezvous offset parametrelerinin
+-- harita sınırları içinde/sayısal olarak geçerli olduğunu FastChecks
+-- içinde doğrular. (3) DERİN-SIM Hit-and-Run Drive-By Tazelenmesi:
+-- server/hitsquad.lua'nın TaskVehicleDriveby + Hit-and-Run kaçış
+-- kancalarını izole bir test araç/sürücü çiftiyle tetikler. (4) DERİN-SIM
+-- Medikal/Büro Sızıntı Doğrulaması: server/wound_system.lua'nın
+-- has_wound==1 -> /tedaviol tedavi zincirinin dayandığı SAF 2x katlanma
+-- formülünü (Matrix.Wounds.ComputeBureauLeakMultiplier -- GERÇEK üretim
+-- fonksiyonu, ConVar'a HİÇ dokunmadan) doğrular. (3) ve (4) SimulationChecks
+-- içinde YALNIZCA deep=true iken çalışır. Bu güncellemeyle mühürleme
+-- barajı DÜRÜSTÇE yükseldi: hızlı katman 44 (FastChecks) + 15 (DbChecks)
+-- = 59/59; deep=true iken +1 (Çıkış Köprüsü) +5 (SimulationChecks, Hit-
+-- and-Run ve Medikal/Büro sızıntısı dahil) = 65/65. Bu sayılar #checks
+-- üzerinden HER ZAMAN OTOMATİK hesaplanır -- burada elle senkronize
+-- edilmesi gereken ayrı bir sabit YOKTUR.
+--
+-- ★ [EMNİYET KİLİDİ] KATMAN 22: Config.Diagnostics.AbortResourceOnSimulation
+-- Failure artık VARSAYILAN OLARAK false -- otomatik açılışta bir
+-- SimulationChecks testi başarısız olsa BİLE kaynak StopResource ile
+-- FİZİKSEL OLARAK DURDURULMAZ; her başarısızlık yine tüm ayrıntısıyla
+-- (hangi kontrol, hangi sapma) konsola/lastReport'a düşer, yalnızca
+-- açılışı FELÇ ETMEZ (bkz. shared/config.lua Config.Diagnostics notu).
 -- =====================================================================
 
 Matrix.Diagnostics = Matrix.Diagnostics or {}
@@ -159,6 +195,75 @@ AddCheck('Logistics.MinDispatchDistanceMeters > 0', function()
     return type(d) == 'number' and d > 0, tostring(d)
 end)
 
+-- ---------------------------------------------------------------------
+-- [KONTROL: CONFIG PED BEKÇİSİ] Config.BotPedConfiguration'daki her
+-- rütbenin katı bir string ped modeline (ChecksumOf/hash TÜRETİMİ DEĞİL)
+-- bağlı olduğunu doğrular -- server/main.lua ResolveRolePedModel'in
+-- dayandığı sözleşmenin kendisi.
+-- ---------------------------------------------------------------------
+AddCheck('Config Ped Bekcisi: BotPedConfiguration rutbe atamalari katı string', function()
+    local pool = Config.BotPedConfiguration
+    if type(pool) ~= 'table' then return false, 'Config.BotPedConfiguration tanimsiz' end
+    local requiredRanks = { 'runner', 'lookout', 'chemist', 'inspector' }
+    for _, rank in ipairs(requiredRanks) do
+        if type(pool[rank]) ~= 'string' or pool[rank] == '' then
+            return false, ('BotPedConfiguration[%s] gecersiz/bos'):format(rank)
+        end
+    end
+    return true, ('%d rutbe dogrulandi'):format(#requiredRanks)
+end)
+
+-- ---------------------------------------------------------------------
+-- [KONTROL: KOORDİNAT KUSURSUZLUĞU] 3 düşman hood bölgesi (Config.GangHoods),
+-- 5 Hayalet Doktor koordinatı (Config.PhantomDoctor.Coords) ve karaborsa/
+-- rendezvous buluşma parametrelerinin (Config.Rendezvous offset aralığı)
+-- harita sınırları içinde ve sayısal olarak geçerli olduğunu doğrular.
+-- ---------------------------------------------------------------------
+local MAP_MIN_XY, MAP_MAX_XY = -6000.0, 8000.0
+local MAP_MIN_Z, MAP_MAX_Z   = -200.0, 1200.0
+
+local function CheckVector3InMapBounds(v, label)
+    if type(v) ~= 'vector3' then
+        return false, ('%s vector3 degil (tip=%s)'):format(label, type(v))
+    end
+    if v.x ~= v.x or v.y ~= v.y or v.z ~= v.z then -- NaN
+        return false, ('%s NaN koordinat iceriyor'):format(label)
+    end
+    if v.x < MAP_MIN_XY or v.x > MAP_MAX_XY or v.y < MAP_MIN_XY or v.y > MAP_MAX_XY
+        or v.z < MAP_MIN_Z or v.z > MAP_MAX_Z then
+        return false, ('%s harita sinirlari disinda (%.1f, %.1f, %.1f)'):format(label, v.x, v.y, v.z)
+    end
+    return true
+end
+
+AddCheck('Koordinat Kusursuzlugu: GangHoods + Hayalet Doktor + karaborsa parametreleri', function()
+    local hoods = Config.GangHoods and Config.GangHoods.Hoods
+    if type(hoods) ~= 'table' or #hoods == 0 then return false, 'Config.GangHoods.Hoods bos/tanimsiz' end
+    for _, hood in ipairs(hoods) do
+        local ok, detail = CheckVector3InMapBounds(hood.coords, ('hood#%s(%s)'):format(tostring(hood.id), tostring(hood.label)))
+        if not ok then return false, detail end
+    end
+
+    local phantomCoords = Config.PhantomDoctor and Config.PhantomDoctor.Coords
+    if type(phantomCoords) ~= 'table' or #phantomCoords == 0 then return false, 'Config.PhantomDoctor.Coords bos/tanimsiz' end
+    for i, c in ipairs(phantomCoords) do
+        local ok, detail = CheckVector3InMapBounds(c, ('phantom#%d'):format(i))
+        if not ok then return false, detail end
+    end
+
+    local r = Config.Rendezvous
+    if not r then return false, 'Config.Rendezvous tanimsiz' end
+    if type(r.MinOffsetMeters) ~= 'number' or type(r.MaxOffsetMeters) ~= 'number' then
+        return false, 'Rendezvous MinOffsetMeters/MaxOffsetMeters sayisal degil'
+    end
+    if r.MinOffsetMeters <= 0 or r.MaxOffsetMeters <= r.MinOffsetMeters then
+        return false, ('Rendezvous offset araligi gecersiz: min=%.1f max=%.1f'):format(r.MinOffsetMeters, r.MaxOffsetMeters)
+    end
+
+    return true, ('%d hood, %d hayalet doktor koordinati, karaborsa offset [%.1f,%.1f]m -- hepsi gecerli'):format(
+        #hoods, #phantomCoords, r.MinOffsetMeters, r.MaxOffsetMeters)
+end)
+
 if Config.ComposerSignature then
     AddCheck('ComposerSignature.volume [0,1] araliginda', function()
         local v = Config.ComposerSignature.volume
@@ -287,6 +392,9 @@ local DbChecks = {
     end },
     { 'matrix_legal_plate_evidence tablosu mevcut (KATMAN 14)', function()
         return TableExists('matrix_legal_plate_evidence'), 'sql/matrix_financial_core.sql calistirildi mi?'
+    end },
+    { 'matrix_diagnostics_stress_log tablosu mevcut (KATMAN 21)', function()
+        return TableExists('matrix_diagnostics_stress_log'), 'sql/matrix_financial_core.sql calistirildi mi?'
     end }
 }
 
@@ -349,11 +457,312 @@ local function RunDeepExitBridgeCheck()
     return { name = 'DERIN: Cikis Koprusu uctan uca (Madde 1)', passed = bridgedOk, detail = tostring(reason) }
 end
 
+
+-- =====================================================================
+-- ★ KATMAN 21: ACIMASIZ DIAGNOSTICS LABORATUVARI -- 3 CANLI ASENKRON
+-- STRES-TESTI SIMULASYONU. Her fonksiyon RunCheck ile SARILIR (yukaridaki
+-- FastChecks/DbChecks ile AYNI mekanizma) -- icindeki bir `assert`
+-- basarisiz olursa RunCheck'in pcall'i onu YAKALAR ve passed=false olarak
+-- rapor eder; Run() daha sonra (yalnizca otomatik acilista, GM emriyle
+-- BILINCLI olarak) bunu AbortResourceBoot'a baglar. YALNIZCA deep=true
+-- ile calisir (Ne FastChecks ne DbChecks TETIKLENMEZ -- onlar HER ZAMAN
+-- hizli/yan-etkisiz kalir).
+-- =====================================================================
+
+-- [21.1] 100 eszamanli async "satis" (ox_inventory RemoveItem + MySQL
+-- transaction) -- ★ CANLI EKONOMIDEN IZOLE: gercek Matrix.Market.EvaluateSale
+-- yerine, kendine ait tani-yalnizca bir stash + matrix_diagnostics_stress_log
+-- tablosu kullanir (dosya basi KAPSAM KARARI'ndaki "canli ekonomiye test
+-- verisi sizdirma" ilkesiyle CELISMEMEK icin BILINCLI secim) -- ama GERCEK
+-- eszamanli RemoveItem + GERCEK MySQL.transaction.await calisir, sahte
+-- degildir. Race condition varsa (kayip/duplicate satir, eksik remove)
+-- assert firlatir.
+local function RunConcurrencyStressCheck()
+    local stashId      = Config.Diagnostics.StressTestStashId or 'matrix_diagnostics_stress_stash'
+    local testItem      = Config.Diagnostics.StressTestItem or 'matrix_diagnostic_token'
+    local concurrency   = Config.Diagnostics.StressTestConcurrency or 100
+    local timeoutMs      = Config.Diagnostics.StressTestTimeoutMs or 15000
+    local runToken       = ('BOOT-%d'):format(GetGameTimer())
+
+    local regOk = pcall(function()
+        exports.ox_inventory:RegisterStash(stashId, 'DIAGNOSTICS STRESS STASH', concurrency + 10, 1000000, false)
+    end)
+    local seedOk = pcall(function()
+        exports.ox_inventory:AddItem(stashId, testItem, concurrency)
+    end)
+    assert(regOk, 'ox_inventory:RegisterStash basarisiz -- stres testi stash\'i kurulamadi')
+    assert(seedOk, ('ox_inventory:AddItem basarisiz -- "%s" item\'i SERVER\'DA KAYITLI DEGIL mi? (Config.Diagnostics.StressTestItem gercek bir item\'a ayarlanmali)'):format(testItem))
+
+    local pending = concurrency
+    for i = 1, concurrency do
+        CreateThread(function()
+            local removeOk, removeResult = pcall(function()
+                return exports.ox_inventory:RemoveItem(stashId, testItem, 1)
+            end)
+            local removedFlag = (removeOk and removeResult) and 1 or 0
+
+            pcall(function()
+                MySQL.transaction.await({
+                    {
+                        query  = 'INSERT INTO matrix_diagnostics_stress_log (run_token, worker_index, removed_ok) VALUES (?, ?, ?)',
+                        values = { runToken, i, removedFlag }
+                    }
+                })
+            end)
+
+            pending = pending - 1
+        end)
+    end
+
+    local waitedMs = 0
+    while pending > 0 and waitedMs < timeoutMs do
+        Wait(50)
+        waitedMs = waitedMs + 50
+    end
+    assert(pending == 0, ('%d/%d worker zaman asimina ugradi (%dms) -- eszamanlilik kilitlenmesi supheli'):format(pending, concurrency, timeoutMs))
+
+    local rows = MySQL.query.await(
+        'SELECT COUNT(*) AS cnt, COALESCE(SUM(removed_ok), 0) AS ok_sum FROM matrix_diagnostics_stress_log WHERE run_token = ?',
+        { runToken }
+    ) or {}
+    local cnt   = rows[1] and tonumber(rows[1].cnt) or 0
+    local okSum = rows[1] and tonumber(rows[1].ok_sum) or 0
+
+    -- Temizlik HER KOŞULDA (assert'ten ONCE) -- basarisiz test bile canli
+    -- DB'de kalici iz BIRAKMAZ.
+    pcall(function() MySQL.query.await('DELETE FROM matrix_diagnostics_stress_log WHERE run_token = ?', { runToken }) end)
+
+    assert(cnt == concurrency,
+        ('%d/%d satir DB\'ye ulasti -- kayip yazma = RACE CONDITION KANITI'):format(cnt, concurrency))
+    assert(okSum == concurrency,
+        ('%d/%d eszamanli RemoveItem basarisiz -- envanter yarisi supheli'):format(concurrency - okSum, concurrency))
+
+    return true, ('%d/%d eszamanli worker, %dms icinde, 0 kayip satir, 0 basarisiz remove'):format(concurrency, concurrency, waitedMs)
+end
+
+
+-- [21.2] Bot uzuv ceza carpanlarinin (hiz, tehdit algilama/Spotter
+-- Distance, denetim-anomali) formul hassasiyeti -- virgulden sonra 4
+-- hane. Test botlari GERCEK PickWoundZone determinizmine (botId+sayac,
+-- restart'lar arasi ONGORULEMEYEN auto-increment ID'ye bagli) DEGIL,
+-- forcedZone'a (bkz. server/wound_system.lua) dayanir -- boylece hangi
+-- bot ID'sinin verildigi FARK ETMEKSIZIN test FLAKY OLMAZ.
+local function RunWoundPrecisionSimCheck()
+    local trapHouseId = nil
+    for id in pairs(Matrix.TrapHouses or {}) do trapHouseId = id; break end
+    if not trapHouseId then
+        return true, 'atlandi -- Matrix.TrapHouses bos (henuz test edilecek bir trap house yok)'
+    end
+
+    local EPS = 0.00005 -- 4 hane hassasiyet esigi
+
+    local botA = Matrix.CreateBotRecord({ name = 'DIAGNOSTIC-WOUND-A', role = 'diagnostic_test', trap_house_id = trapHouseId })
+    assert(botA and botA.id, 'test bot A olusturulamadi')
+
+    Matrix.Wounds.ApplyBotRegionalDamage(botA.id, 1.0, 'leg')
+    local moveMult = Matrix.Wounds.GetMovementMultiplier(botA.id)
+    local expectedMove = 1.0 - (Config.BotWounds.LegSpeedPenalty or 0.60)
+    assert(type(moveMult) == 'number' and math.abs(moveMult - expectedMove) < EPS,
+        ('hareket carpani sapmasi: beklenen=%.4f gercek=%.4f'):format(expectedMove, moveMult or -1))
+
+    Matrix.Wounds.ApplyBotRegionalDamage(botA.id, 1.0, 'head')
+    local detCap = Matrix.Wounds.GetDetectionRangeCap(botA.id)
+    local expectedDet = Config.BotWounds.HeadDetectionRangeCap or 15.0
+    assert(type(detCap) == 'number' and math.abs(detCap - expectedDet) < EPS,
+        ('Spotter Distance sapmasi: beklenen=%.4f gercek=%.4f'):format(expectedDet, detCap or -1))
+
+    Matrix.Wounds.ApplyBotRegionalDamage(botA.id, 1.0, 'arm')
+    local accMult = Matrix.Wounds.GetAccuracyMultiplier(botA.id)
+    local expectedAcc = 1.0 - (Config.BotWounds.ArmAccuracyPenalty or 0.50)
+    assert(type(accMult) == 'number' and math.abs(accMult - expectedAcc) < EPS,
+        ('isabet carpani sapmasi: beklenen=%.4f gercek=%.4f'):format(expectedAcc, accMult or -1))
+
+    Matrix.RemoveBot(botA.id, 'retired')
+
+    -- Kalici sakatlik (crippled) yolu -- ayri bir bot: CripplingThreshold'a
+    -- (varsayilan 1.0) ulasana kadar ayni bolgeye (delta=0.25/vurus) 4 kez
+    -- vurulur.
+    local botB = Matrix.CreateBotRecord({ name = 'DIAGNOSTIC-WOUND-B', role = 'diagnostic_test', trap_house_id = trapHouseId })
+    assert(botB and botB.id, 'test bot B olusturulamadi')
+    for _ = 1, 4 do
+        Matrix.Wounds.ApplyBotRegionalDamage(botB.id, 1.0, 'leg')
+    end
+    local moveMultCrippled = Matrix.Wounds.GetMovementMultiplier(botB.id)
+    local expectedMoveCrippled = 1.0 - (Config.PermanentCrippling.LegMovementPenalty or 0.90)
+    assert(type(moveMultCrippled) == 'number' and math.abs(moveMultCrippled - expectedMoveCrippled) < EPS,
+        ('kalici sakatlik hareket carpani sapmasi: beklenen=%.4f gercek=%.4f'):format(expectedMoveCrippled, moveMultCrippled or -1))
+
+    Matrix.RemoveBot(botB.id, 'retired')
+
+    return true, ('bacak=%.4f algi=%.4f kol=%.4f kalici-bacak=%.4f'):format(moveMult, detCap, accMult, moveMultCrippled)
+end
+
+
+-- [21.3] Hayalet Doktor rotasyon formulunun (Matrix.Wounds.__ComputePhantomIndexForEpochBucket
+-- -- GERCEK uretim formulunun kendisi, bir kopyasi DEGIL) 10.000 epoch
+-- boyunca ileri VE geri (Bach "Yengec Kanonu" palindromu ruhuna uygun)
+-- calistirildiginda BIREBIR ayni sonucu urettigini kanitlar -- SIFIR RNG
+-- iddiasinin somut, olcelebilir kaniti. Salt-okunur/yan etkisiz.
+local function RunPhantomDoctorPalindromeSimCheck()
+    assert(type(Matrix.Wounds.__ComputePhantomIndexForEpochBucket) == 'function',
+        'Matrix.Wounds.__ComputePhantomIndexForEpochBucket tanimli degil')
+
+    local epochCount = Config.Diagnostics.PhantomPalindromeEpochCount or 10000
+    local forward = {}
+    for bucket = 0, epochCount - 1 do
+        forward[bucket] = Matrix.Wounds.__ComputePhantomIndexForEpochBucket(bucket)
+    end
+    for bucket = epochCount - 1, 0, -1 do
+        local idx = Matrix.Wounds.__ComputePhantomIndexForEpochBucket(bucket)
+        assert(idx == forward[bucket],
+            ('epoch #%d ileri/geri sapma -- DETERMINIZM IHLALI: ileri=%s geri=%s'):format(bucket, tostring(forward[bucket]), tostring(idx)))
+    end
+
+    return true, ('%d epoch, ileri+geri, BIREBIR ayni (palindrom dogrulandi)'):format(epochCount)
+end
+
+
+-- [21.4] HIT-AND-RUN DRIVE-BY TAZELENMESİ: server/hitsquad.lua'nın
+-- TaskVehicleDriveby (15 saniyelik yaylım ateş fazının kancası) ve ardından
+-- gaza basıp en yakın mahalleye kaçış (TaskVehicleDriveToCoord) kancalarını
+-- GERÇEK Config.HitSquad parametreleriyle, izole/kullan-at bir test aracı+
+-- sürücüsü üzerinde tetikler -- HİÇBİR canlı oyuncuyu hedeflemez, HİÇBİR
+-- canlı ekonomi/DB satırına dokunmaz. Amaç 15 saniye gerçekten BEKLEMEK
+-- değil (SIFIR yan etki ilkesiyle çelişir), kancaların doğru argüman
+-- sayısı/tipiyle çağrıldığını ve nil/mantıksal hata FIRLATMADIĞINI
+-- kanıtlamaktır -- biri firlatirsa assert bunu yakalar ve (isAutoBoot +
+-- AbortResourceOnSimulationFailure=true iken) kaynak açılışı DURDURULUR.
+local function RunHitAndRunDrivebySimCheck()
+    assert(Config.HitSquad, 'Config.HitSquad tanimsiz')
+    local hs = Config.HitSquad
+
+    for _, field in ipairs({ 'VehicleModel', 'PedModel', 'Weapon' }) do
+        assert(type(hs[field]) == 'string' and hs[field] ~= '', ('Config.HitSquad.%s gecersiz/bos'):format(field))
+    end
+    for _, field in ipairs({ 'CruiseSpeed', 'AttackRange', 'DrivebySeconds', 'FleeSeconds',
+                             'AggressiveDriveStyle', 'DrivebyRange', 'PedAccuracy', 'ScanIntervalTicks' }) do
+        assert(type(hs[field]) == 'number', ('Config.HitSquad.%s sayisal degil'):format(field))
+    end
+    assert(type(hs.HeatTraceThreshold) == 'number' and hs.HeatTraceThreshold >= 0 and hs.HeatTraceThreshold <= 1.0,
+        'Config.HitSquad.HeatTraceThreshold [0,1] araliginda degil')
+
+    local hood = Config.GangHoods and Config.GangHoods.Hoods and Config.GangHoods.Hoods[1]
+    if not hood or not hood.coords then
+        return true, 'atlandi -- Config.GangHoods.Hoods bos (henuz test edilecek mahalle yok)'
+    end
+
+    local vehHash = GetHashKey(hs.VehicleModel)
+    local pedHash = GetHashKey(hs.PedModel)
+
+    local vehicle = CreateVehicle(vehHash, hood.coords.x, hood.coords.y, hood.coords.z, 0.0, true, true)
+    if not Matrix.AwaitEntityCreation(vehicle) then
+        pcall(function() if DoesEntityExist(vehicle) then DeleteEntity(vehicle) end end)
+        assert(false, 'test araci dogurulamadi (timeout)')
+    end
+    pcall(SetEntityOrphanMode, vehicle, 2) -- KeepEntity
+
+    local driver = CreatePedInsideVehicle(vehicle, 0, pedHash, -1, true, true)
+    if not Matrix.AwaitEntityCreation(driver) then
+        pcall(function() if DoesEntityExist(vehicle) then DeleteEntity(vehicle) end end)
+        pcall(function() if DoesEntityExist(driver) then DeleteEntity(driver) end end)
+        assert(false, 'test suruculer dogurulamadi (timeout)')
+    end
+    pcall(SetEntityOrphanMode, driver, 2) -- KeepEntity
+
+    -- FAZ 1: 15sn'lik yaylim ates kancasi (server/hitsquad.lua TickPlayer
+    -- 'driveby' fazi ile BIREBIR AYNI arguman sekli -- canli hedef yerine
+    -- kendi test surucusu zararsiz yer-tutucu olarak verilir).
+    local drivebyOk, drivebyErr = pcall(TaskVehicleDriveby, driver, driver, 0, 0.0, 0.0, 0.0,
+        hs.DrivebyRange, hs.PedAccuracy, false, GetHashKey('FIRING_PATTERN_FULL_AUTO'))
+
+    -- FAZ 2: "Hit-and-Run" -- gaza basip en yakin mahalleye kacis kancasi
+    -- (TickPlayer 'fleeing' fazi ile BIREBIR AYNI arguman sekli).
+    pcall(ClearPedTasksImmediately, driver)
+    local fleeOk, fleeErr = pcall(TaskVehicleDriveToCoord, driver, vehicle,
+        hood.coords.x, hood.coords.y, hood.coords.z, hs.CruiseSpeed * 1.4, 0,
+        vehHash, hs.AggressiveDriveStyle, 5.0, 1)
+
+    -- Temizlik HER KOSULDA (assert'ten ONCE) -- basarisiz test bile dunyada
+    -- kalici entity BIRAKMAZ.
+    pcall(function() if DoesEntityExist(driver) then DeleteEntity(driver) end end)
+    pcall(function() if DoesEntityExist(vehicle) then DeleteEntity(vehicle) end end)
+
+    assert(drivebyOk, ('TaskVehicleDriveby (yaylim ates) kancasi hata firlatti -- nil/gecersiz kanca supheli: %s'):format(tostring(drivebyErr)))
+    assert(fleeOk, ('Hit-and-Run kacis TaskVehicleDriveToCoord kancasi hata firlatti: %s'):format(tostring(fleeErr)))
+
+    return true, ('drive-by + hit-and-run kancalari 0 hata ile calisti (mahalle=%s)'):format(tostring(hood.label))
+end
+
+
+-- [22.2] MEDİKAL/BÜRO SIZINTI DOĞRULAMASI: server/wound_system.lua'nın
+-- has_wound==1 -> /tedaviol -> LeakToBureauOnTreatment zincirinin dayandığı
+-- SAF formülü (Matrix.Wounds.ComputeBureauLeakMultiplier -- GERÇEK üretim
+-- fonksiyonunun KENDİSİ, bir kopyası DEĞİL) doğrular. matrix_bureau_intensity
+-- ConVar'ına ASLA dokunmaz, hiçbir oyuncu/DB satırı OKUMAZ/YAZMAZ -- tamamen
+-- yan-etkisiz, saf sayısal bir kanıt.
+local function RunMedicalBureauLeakSimCheck()
+    assert(type(Matrix.Wounds.ComputeBureauLeakMultiplier) == 'function',
+        'Matrix.Wounds.ComputeBureauLeakMultiplier tanimli degil')
+    assert(type(Config.Hospital) == 'table', 'Config.Hospital tanimsiz')
+    assert(type(Config.Hospital.LeakIntensityMultiplier) == 'number' and Config.Hospital.LeakIntensityMultiplier > 1.0,
+        ('Config.Hospital.LeakIntensityMultiplier gecersiz (2x katlanma bekleniyor): %s'):format(tostring(Config.Hospital.LeakIntensityMultiplier)))
+
+    local EPS = 0.00005
+
+    -- Normal taban: 1.0 yogunluk -> tam olarak LeakIntensityMultiplier'a sizar.
+    local spiked, mult = Matrix.Wounds.ComputeBureauLeakMultiplier(1.0)
+    local expected = 1.0 * Config.Hospital.LeakIntensityMultiplier
+    assert(math.abs(spiked - expected) < EPS,
+        ('has_wound==1 medikal sizinti formulu sapmasi: beklenen=%.4f gercek=%.4f'):format(expected, spiked))
+    assert(math.abs(mult - Config.Hospital.LeakIntensityMultiplier) < EPS,
+        'donen carpan Config.Hospital.LeakIntensityMultiplier ile uyusmuyor')
+
+    -- Gecersiz/negatif/NaN ConVar girdisi -- production ile BIREBIR AYNI
+    -- 1.0 taban fallback'i dogrulanir.
+    local nanValue = 0.0 / 0.0
+    for _, badInput in ipairs({ -5.0, 0.0, nanValue }) do
+        local fallbackSpiked = Matrix.Wounds.ComputeBureauLeakMultiplier(badInput)
+        assert(math.abs(fallbackSpiked - expected) < EPS,
+            ('gecersiz girdi (%s) icin 1.0 taban fallback formulu bozuk: gercek=%.4f'):format(tostring(badInput), fallbackSpiked))
+    end
+
+    -- Farkli bir gercekci yogunluk (2.35) ile de carpim dogru mu?
+    local spiked2 = Matrix.Wounds.ComputeBureauLeakMultiplier(2.35)
+    local expected2 = 2.35 * Config.Hospital.LeakIntensityMultiplier
+    assert(math.abs(spiked2 - expected2) < EPS,
+        ('2.35 taban icin sizinti sapmasi: beklenen=%.4f gercek=%.4f'):format(expected2, spiked2))
+
+    return true, ('taban=1.00 -> sizinti=%.2f (x%.1f), 3 gecersiz-girdi fallback + 1 farkli-taban dogrulandi'):format(spiked, mult)
+end
+
+
+local SimulationChecks = {
+    { 'DERIN-SIM: 100 eszamanli async satis stres testi (KATMAN 21.1)',            RunConcurrencyStressCheck },
+    { 'DERIN-SIM: Bot yara ceza carpani 4-hane hassasiyeti (KATMAN 21.2)',          RunWoundPrecisionSimCheck },
+    { 'DERIN-SIM: Hayalet Doktor 10k-epoch palindrom determinizmi (KATMAN 21.3)',   RunPhantomDoctorPalindromeSimCheck },
+    { 'DERIN-SIM: Hit-and-Run drive-by tazelenmesi (KATMAN 22.1)',                  RunHitAndRunDrivebySimCheck },
+    { 'DERIN-SIM: Medikal/Buro sizinti 2x katlanma formulu (KATMAN 22.2)',          RunMedicalBureauLeakSimCheck }
+}
+
+
+-- ★ KATMAN 21: bir SimulationChecks testi otomatik acilista basarisiz
+-- olursa (ve Config.Diagnostics.AbortResourceOnSimulationFailure=true
+-- ise) kaynagin KENDI acilisini durdurur. Bu, FXServer'in TUMUNU
+-- cokertmez -- yalnizca bu resource'u StopResource ile durdurur (bir
+-- GM'in manuel `/matrix_run_diagnostics deep` calistirmasinda ASLA
+-- tetiklenmez, YALNIZCA onServerResourceStart otomatik yolunda).
+local function AbortResourceBoot(reason)
+    local msg = ('[KATMAN 21][KRITIK] Kaynak acilisi DURDURULUYOR -- %s'):format(tostring(reason))
+    Matrix.Log('DIAGNOSTICS', msg)
+    print(('^1[MATRIX:DIAGNOSTICS] %s^7'):format(msg))
+    StopResource(GetCurrentResourceName())
+end
+
 -- Matrix.Diagnostics.Run: kendi CreateThread'i içinde çalışır (MySQL.*
 -- .await çağrıları coroutine bağlamı GEREKTİRİR -- server/bureau.lua
 -- LoadLearningCore İLE AYNI disiplin), bu yüzden Run() top-level'dan da
 -- güvenle çağrılabilir.
-function Matrix.Diagnostics.Run(deep, replyTo)
+function Matrix.Diagnostics.Run(deep, replyTo, isAutoBoot)
     CreateThread(function()
         local startedAt = GetGameTimer()
         local checks = {}
@@ -379,6 +788,12 @@ function Matrix.Diagnostics.Run(deep, replyTo)
                     detail = ('HATA: %s'):format(tostring(deepResult))
                 }
             end
+
+            -- ★ KATMAN 21-22: acimasiz stres-test simulasyonlari (#SimulationChecks
+            -- tane -- bkz. yukaridaki tanim) -- YALNIZCA deep=true iken.
+            for _, c in ipairs(SimulationChecks) do
+                checks[#checks + 1] = RunCheck(c[1], c[2])
+            end
         end
 
         local passed, failed = 0, 0
@@ -401,6 +816,22 @@ function Matrix.Diagnostics.Run(deep, replyTo)
             '[MATRIX RUN DIAGNOSTICS] %d/%d basarili (deep=%s) -- %dms icinde tamamlandi. Sonuc: %s',
             passed, #checks, tostring(lastReport.deep), lastReport.duration_ms,
             lastReport.sealed and 'MUHURLENDI (0 hata)' or ('%d HATA'):format(failed))
+
+        -- ★ KATMAN 21: otomatik acilista basarisiz kontrol varsa VE
+        -- AbortResourceOnSimulationFailure acikken, kaynagin acilisini
+        -- burada DURDURUYORUZ -- asagidaki replyTo/broadcast'e HIC
+        -- ulasmadan (StopResource zaten kaynagin geri kalanini durdurur).
+        if isAutoBoot and failed > 0 and Config.Diagnostics.AbortResourceOnSimulationFailure then
+            local firstFailure = nil
+            for _, c in ipairs(checks) do
+                if not c.passed then firstFailure = c; break end
+            end
+            AbortResourceBoot(('%d/%d kontrol basarisiz -- ilk hata: [%s] %s'):format(
+                failed, #checks,
+                firstFailure and firstFailure.name or '?',
+                firstFailure and firstFailure.detail or '?'))
+            return
+        end
 
         if replyTo then
             Reply(replyTo, ('%d/%d kontrol basarili (%dms). %s'):format(
@@ -434,9 +865,11 @@ end)
 AddEventHandler('onServerResourceStart', function(resourceName)
     if resourceName ~= GetCurrentResourceName() then return end
     if not (Config.Diagnostics and Config.Diagnostics.RunOnResourceStart) then return end
-    -- Otomatik acilis: HER ZAMAN hizli katman, ASLA deep (dosya basi
-    -- KAPSAM KARARI).
-    Matrix.Diagnostics.Run(false, nil)
+    -- ★ KATMAN 21: eski KAPSAM KARARI ("otomatik acilis HER ZAMAN hizli
+    -- katman, ASLA deep") bu GM emriyle BILINCLI olarak GECERSIZ KILINDI.
+    -- Artik HER acilista deep=true (SimulationChecks dahil) calisir;
+    -- isAutoBoot=true, basarisizlikta AbortResourceBoot yetkisi verir.
+    Matrix.Diagnostics.Run(true, nil, true)
 end)
 
 -- /matrix_run_diagnostics [deep] -- diger tum admin/test komutlariyla

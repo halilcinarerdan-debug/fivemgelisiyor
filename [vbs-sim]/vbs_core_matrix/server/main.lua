@@ -184,13 +184,22 @@ local PENDING_EVENTS_MAX = 64
 
 
 -- =====================================================================
--- ★ [H14] KRİTİK ANTI-CRASH GUARD: SUNUCU TARAFI PED SPAWN KISITLAMASI
--- Tüm dealer/dispatch ped spawn'ları bu SABİT hash'i kullanır. Rol bazlı
--- Config.RoleModels/Config.DefaultRoleModel zincirine KASITLI olarak HİÇ
--- başvurulmaz — ciddiyetsiz/uygunsuz skin fallback'ini kökten engeller.
+-- ★ [H14→H15] KONFİG DESTEKLİ ROL->PED ATAMASI: dealer/dispatch ped
+-- spawn'ları artık Config.BotPedConfiguration (öncelik) ve Config.RoleModels
+-- (ikincil) tablolarından bot.role'e karşılık gelen modeli KATI BİR STRING
+-- olarak okur -- ChecksumOf/hash tabanlı seçim YOK (0 RNG). Hiçbir tabloda
+-- eşleşme yoksa Config.DefaultRoleModel'e, o da yoksa DEALER_PED_MODEL_NAME
+-- sabit fallback'ine düşülür.
 -- =====================================================================
 local DEALER_PED_MODEL_NAME = 'g_m_y_famdnf_01' -- Street Dealer / Hooded Runner Skin
-local DEALER_PED_MODEL_HASH = GetHashKey(DEALER_PED_MODEL_NAME)
+
+local function ResolveRolePedModel(role)
+    local modelName = (Config.BotPedConfiguration and Config.BotPedConfiguration[role])
+        or (Config.RoleModels and Config.RoleModels[role])
+        or Config.DefaultRoleModel
+        or DEALER_PED_MODEL_NAME
+    return GetHashKey(modelName), modelName
+end
 
 
 -- =====================================================================
@@ -724,7 +733,7 @@ function Matrix.SpawnBot(id, coords)
     end
 
 
-    local modelHash = DEALER_PED_MODEL_HASH
+    local modelHash, modelName = ResolveRolePedModel(bot.role)
     local x, y, z   = coords.x, coords.y, coords.z
     local heading   = coords.w or 0.0
 
@@ -750,7 +759,7 @@ function Matrix.SpawnBot(id, coords)
 
 
     TriggerClientEvent('matrix:client:injectBot', -1, id, bot.role, coords, bot.dna_id, netId)
-    Matrix.Log('CORE', 'Bot #%d enjekte edildi [%s] NetID:%d', id, DEALER_PED_MODEL_NAME, netId)
+    Matrix.Log('CORE', 'Bot #%d enjekte edildi [%s / %s] NetID:%d', id, bot.role, modelName, netId)
     return true, netId
 end
 
@@ -951,8 +960,8 @@ end
 --- entity'ler DÜNYADAN SİLİNİR (bkz. [H8]) — davranış tek-hedef sürümüyle
 --- birebir aynıdır, yalnızca ortaklaştırılmıştır.
 local function SpawnDispatchActors(bot, origin, vehicleType, cruiseSpeed, firstDestination)
-    -- ★ [H14] ANTI-CRASH GUARD: sabit model, rol bazlı fallback YOK.
-    local pedHash = DEALER_PED_MODEL_HASH
+    -- ★ [H15] Config destekli rol->ped ataması (bkz. ResolveRolePedModel).
+    local pedHash = ResolveRolePedModel(bot.role)
     local isFoot  = (vehicleType == 'foot')
 
 
