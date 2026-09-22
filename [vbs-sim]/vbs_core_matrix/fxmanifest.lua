@@ -3,8 +3,8 @@ game 'gta5'
 lua54 'yes'
 
 author 'projeFivem'
-description 'Katman 1-2-3-4-5 ULTIMATE + KATMAN 6 Birlesik Motor + KATMAN 7 [T1-T4] Faz 1-2: Core Matrix, Adli Balistik (+ Gercekci Namlu Asinmasi/Tutukluk + Real-Time Ust Arama), Recruitment (+ Propaganda Devsirme Koprusu), The Bureau (+ Buro Kilidi/Nukleer Abluka + AI Danisma Koprusu), Mutfak & Psikoloji Simulasyonu (+ Paketleme Odasi), Programli Lojistik Sevk (+ Otomatik Rota Teslimati + GTAO Cikis Koprusu + Toplu Satis Hub Lojistigi + Bagaj Ameliyati), Qbox Co-op Kartel Hiyerarsisi & Bolgesel Piyasa (+ Canli Sokak Satis Dongusu), Taktik Karaborsa Ticaret Agi (+ Rendezvous Teslimati/Buro Pususu), SIGINT/COMINT Bolge Denetleyicileri, Sanal Mahalle Evi (Interior Instance), Silah Tamir Tezgahi & Paketleme Odasi, Kapi Surgu Tahkimati, Monokrom Taktik HUD'
-version '1.6.0'
+description 'Katman 1-2-3-4-5 ULTIMATE + KATMAN 6 Birlesik Motor + KATMAN 7 [T1-T4] Faz 1-2 + KATMAN 8: Core Matrix, Adli Balistik (+ Gercekci Namlu Asinmasi/Tutukluk + Real-Time Ust Arama), Recruitment (+ Propaganda Devsirme Koprusu), The Bureau (+ Buro Kilidi/Nukleer Abluka + AI Danisma Koprusu), Mutfak & Psikoloji Simulasyonu (+ Paketleme Odasi), Programli Lojistik Sevk (+ Otomatik Rota Teslimati + GTAO Cikis Koprusu + Toplu Satis Hub Lojistigi + Bagaj Ameliyati), Qbox Co-op Kartel Hiyerarsisi & Bolgesel Piyasa (+ Canli Sokak Satis Dongusu), Taktik Karaborsa Ticaret Agi (+ Rendezvous Teslimati/Buro Pususu), SIGINT/COMINT Bolge Denetleyicileri, Sanal Mahalle Evi (Interior Instance), Silah Tamir Tezgahi & Paketleme Odasi, Kapi Surgu Tahkimati, Monokrom Taktik HUD, Dusman Hucum Ekibi Drive-By Takip Motoru'
+version '1.7.0'
 
 shared_scripts {
     '@ox_lib/init.lua',
@@ -34,6 +34,10 @@ server_scripts {
     'server/trap_house_interior.lua',
     'server/workbench.lua',
     'server/door_reinforcement.lua',
+    -- ★ KATMAN 8: düşman hücum ekibi drive-by takip motoru — Matrix.Bureau
+    -- (heat), Matrix.TrapHouses ve Config.GangHoods'a bağımlı olduğundan
+    -- onların ARKASINDA yüklenir.
+    'server/hitsquad.lua',
     -- ★ Otomasyonlu Regresyon Çekirdeği: diğer TÜM server dosyalarının
     -- Matrix.* kancalarını okuduğu için listenin EN SONUNDA (yalnızca
     -- okunabilirlik için -- kontroller run-time'da çalıştığından, o ana

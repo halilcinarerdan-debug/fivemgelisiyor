@@ -627,6 +627,44 @@ Config.Rendezvous = {
 }
 
 
+-- =====================================================================
+-- ★★★ KATMAN 8: DÜŞMAN HÜCUM EKİBİ — "DRIVE-BY" TAKİP MOTORU ★★★
+-- server/hitsquad.lua'nın Config sözleşmesi. Hedefleme, server/rendezvous.
+-- lua [R2] İLE AYNI trace-level formülünü (Matrix.Bureau.GetHeat / Config.
+-- Bureau.CyberLeakMaxIntensity) yeniden kullanır — ikinci bir "ısı" alanı
+-- İCAT EDİLMEZ. RNG YOK: eşik karşılaştırması + sabit süreli fazlar.
+-- =====================================================================
+Config.GangHoods = {
+    { label = 'Grove Cehennemi', coords = vector3(115.0,  -1961.0, 21.0) },
+    { label = 'Vagos Bataklık',  coords = vector3(362.0,  -2043.0, 20.0) },
+    { label = 'Ballas Rıhtım',   coords = vector3(-90.0,  -1650.0, 30.0) },
+    { label = 'Aztec Deposu',    coords = vector3(1000.0, -3175.0, 5.0)  }
+}
+
+Config.HitSquad = {
+    -- Config.Rendezvous.AmbushTraceLevelThreshold İLE PAYLAŞILAN eşik —
+    -- KATMAN 6'nın "ne zaman tehlikeli" tanımıyla ÇELİŞMEZ.
+    HeatTraceThreshold = Config.Rendezvous.AmbushTraceLevelThreshold,
+
+    -- Hedefleme taraması main.lua'nın bureauAccumulator deseniyle AYNI
+    -- TARZDA, Config.Tick.IntervalMs'e göre birikimli sayılır — HER TICK
+    -- ÇALIŞMAZ.
+    ScanIntervalTicks = 5,
+
+    AttackRange      = 12.0,
+    DrivebyRange      = 60.0,
+    DrivebySeconds    = 15,
+    FleeSeconds       = 20,
+    CruiseSpeed       = 18.0,
+    AggressiveDriveStyle = 16777216,
+
+    VehicleModel = 'sultan2',
+    PedModel     = 'g_m_y_ballasout_01',
+    Weapon       = 'WEAPON_MICROSMG',
+    PedAccuracy  = 70
+}
+
+
 -- ---------------------------------------------------------------------
 -- [K6-2] SANAL MAHALLE EVİ (INTERIOR INSTANCE)
 -- Fütüristik/high-tech sığınak YASAK — vanilla GTA V döküntü iç mekan
