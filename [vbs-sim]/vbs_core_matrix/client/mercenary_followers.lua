@@ -23,7 +23,10 @@ local Followers = {} -- [i] = { ped = handle, entering = bool }
 
 local function DeleteFollower(entry)
     if entry and entry.ped and DoesEntityExist(entry.ped) then
-        DeleteEntity(entry.ped)
+        SetEntityAsNoLongerNeeded(entry.ped)
+        if DoesEntityExist(entry.ped) then
+            DeletePed(entry.ped)
+        end
     end
 end
 
@@ -44,7 +47,12 @@ local function SpawnFollowerPed(coords)
         return nil
     end
 
-    SetEntityOrphanMode(ped, 2) -- [H14] deseniyle AYNI: sunucunun asla silmemesi garantisi
+    -- [DÜZELTME] 'SetEntityOrphanMode' CLIENT tarafında tanımsızdır (server-only
+    -- native) -- doğrudan çağrısı nil upvalue/global çağrısı olarak çöker. Her
+    -- FXServer sürümünde çalışan client-safe eşdeğeri: ped'i mission entity
+    -- olarak işaretlemek (garbage-collect edilmesin) + temizlikte
+    -- SetEntityAsNoLongerNeeded/DeletePed ile bırakmak.
+    SetEntityAsMissionEntity(ped, true, true)
     SetPedFleeAttributes(ped, 0, false)
     SetPedCombatAttributes(ped, 46, true) -- BF_CanFightArmedPedsWhenNotArmed benzeri saldirganlik izni
     SetPedCombatAbility(ped, 2)

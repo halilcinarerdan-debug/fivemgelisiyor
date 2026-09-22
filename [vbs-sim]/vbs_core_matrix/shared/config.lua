@@ -180,6 +180,22 @@ Config.DefaultRoleModel = 's_m_y_dealer_01'
 
 
 -- =====================================================================
+-- Dinamik Ped Yapılandırma Havuzu (Config Destekli Rol->Ped Ataması)
+-- server/main.lua Matrix.SpawnBot/SpawnDispatchActors artık BURADAN, doğrudan
+-- katı bir string olarak, bot.role'e karşılık gelen ped modelini okur --
+-- ChecksumOf/hash tabanlı bir seçim YOKTUR (0 RNG, tam determinizm).
+-- Config.RoleModels ile ÇAKIŞAN roller (runner/lookout) burada KASITLI
+-- OLARAK AYNI modele sabitlenmiştir; chemist/inspector bu havuza ÖZGÜDÜR.
+-- =====================================================================
+Config.BotPedConfiguration = {
+    ['runner']    = 's_m_y_dealer_01',
+    ['lookout']   = 'g_m_y_ballaeast_01',
+    ['chemist']   = 'g_m_y_vagos_01',
+    ['inspector'] = 'a_m_m_mexcntry_01'
+}
+
+
+-- =====================================================================
 -- Katman 4: Programli Lojistik Sevk & Zaman-Mesafe Surtunme Motoru
 -- =====================================================================
 Config.Logistics = {

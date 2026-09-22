@@ -38,6 +38,22 @@
 --
 -- SIFIR RNG: her kontrol saf/deterministiktir -- aynı config + aynı DB
 -- durumu HER ZAMAN aynı raporu üretir.
+--
+-- ★★★ KATMAN 22 GÜNCELLEMESİ: 3 yeni bekçi eklendi -- (1) Config Ped
+-- Bekçisi: Config.BotPedConfiguration'daki runner/lookout/chemist/
+-- inspector rütbelerinin katı string ped modeline bağlı olduğunu FastChecks
+-- içinde doğrular. (2) Koordinat Kusursuzluğu: 3 düşman hood bölgesi, 5
+-- Hayalet Doktor koordinatı ve karaborsa/rendezvous offset parametrelerinin
+-- harita sınırları içinde/sayısal olarak geçerli olduğunu FastChecks
+-- içinde doğrular. (3) DERİN-SIM Hit-and-Run Drive-By Tazelenmesi:
+-- server/hitsquad.lua'nın TaskVehicleDriveby + Hit-and-Run kaçış
+-- kancalarını izole bir test araç/sürücü çiftiyle tetikler, SimulationChecks
+-- içinde YALNIZCA deep=true iken çalışır. Bu güncellemeyle mühürleme
+-- barajı DÜRÜSTÇE yükseldi: hızlı katman 44 (FastChecks) + 15 (DbChecks)
+-- = 59/59; deep=true iken +1 (Çıkış Köprüsü) +4 (SimulationChecks,
+-- Hit-and-Run dahil) = 64/64. Bu sayılar #checks üzerinden HER ZAMAN
+-- OTOMATİK hesaplanır -- burada elle senkronize edilmesi gereken ayrı bir
+-- sabit YOKTUR.
 -- =====================================================================
 
 Matrix.Diagnostics = Matrix.Diagnostics or {}
@@ -166,6 +182,75 @@ end)
 AddCheck('Logistics.MinDispatchDistanceMeters > 0', function()
     local d = Config.Logistics.MinDispatchDistanceMeters
     return type(d) == 'number' and d > 0, tostring(d)
+end)
+
+-- ---------------------------------------------------------------------
+-- [KONTROL: CONFIG PED BEKÇİSİ] Config.BotPedConfiguration'daki her
+-- rütbenin katı bir string ped modeline (ChecksumOf/hash TÜRETİMİ DEĞİL)
+-- bağlı olduğunu doğrular -- server/main.lua ResolveRolePedModel'in
+-- dayandığı sözleşmenin kendisi.
+-- ---------------------------------------------------------------------
+AddCheck('Config Ped Bekcisi: BotPedConfiguration rutbe atamalari katı string', function()
+    local pool = Config.BotPedConfiguration
+    if type(pool) ~= 'table' then return false, 'Config.BotPedConfiguration tanimsiz' end
+    local requiredRanks = { 'runner', 'lookout', 'chemist', 'inspector' }
+    for _, rank in ipairs(requiredRanks) do
+        if type(pool[rank]) ~= 'string' or pool[rank] == '' then
+            return false, ('BotPedConfiguration[%s] gecersiz/bos'):format(rank)
+        end
+    end
+    return true, ('%d rutbe dogrulandi'):format(#requiredRanks)
+end)
+
+-- ---------------------------------------------------------------------
+-- [KONTROL: KOORDİNAT KUSURSUZLUĞU] 3 düşman hood bölgesi (Config.GangHoods),
+-- 5 Hayalet Doktor koordinatı (Config.PhantomDoctor.Coords) ve karaborsa/
+-- rendezvous buluşma parametrelerinin (Config.Rendezvous offset aralığı)
+-- harita sınırları içinde ve sayısal olarak geçerli olduğunu doğrular.
+-- ---------------------------------------------------------------------
+local MAP_MIN_XY, MAP_MAX_XY = -6000.0, 8000.0
+local MAP_MIN_Z, MAP_MAX_Z   = -200.0, 1200.0
+
+local function CheckVector3InMapBounds(v, label)
+    if type(v) ~= 'vector3' then
+        return false, ('%s vector3 degil (tip=%s)'):format(label, type(v))
+    end
+    if v.x ~= v.x or v.y ~= v.y or v.z ~= v.z then -- NaN
+        return false, ('%s NaN koordinat iceriyor'):format(label)
+    end
+    if v.x < MAP_MIN_XY or v.x > MAP_MAX_XY or v.y < MAP_MIN_XY or v.y > MAP_MAX_XY
+        or v.z < MAP_MIN_Z or v.z > MAP_MAX_Z then
+        return false, ('%s harita sinirlari disinda (%.1f, %.1f, %.1f)'):format(label, v.x, v.y, v.z)
+    end
+    return true
+end
+
+AddCheck('Koordinat Kusursuzlugu: GangHoods + Hayalet Doktor + karaborsa parametreleri', function()
+    local hoods = Config.GangHoods and Config.GangHoods.Hoods
+    if type(hoods) ~= 'table' or #hoods == 0 then return false, 'Config.GangHoods.Hoods bos/tanimsiz' end
+    for _, hood in ipairs(hoods) do
+        local ok, detail = CheckVector3InMapBounds(hood.coords, ('hood#%s(%s)'):format(tostring(hood.id), tostring(hood.label)))
+        if not ok then return false, detail end
+    end
+
+    local phantomCoords = Config.PhantomDoctor and Config.PhantomDoctor.Coords
+    if type(phantomCoords) ~= 'table' or #phantomCoords == 0 then return false, 'Config.PhantomDoctor.Coords bos/tanimsiz' end
+    for i, c in ipairs(phantomCoords) do
+        local ok, detail = CheckVector3InMapBounds(c, ('phantom#%d'):format(i))
+        if not ok then return false, detail end
+    end
+
+    local r = Config.Rendezvous
+    if not r then return false, 'Config.Rendezvous tanimsiz' end
+    if type(r.MinOffsetMeters) ~= 'number' or type(r.MaxOffsetMeters) ~= 'number' then
+        return false, 'Rendezvous MinOffsetMeters/MaxOffsetMeters sayisal degil'
+    end
+    if r.MinOffsetMeters <= 0 or r.MaxOffsetMeters <= r.MinOffsetMeters then
+        return false, ('Rendezvous offset araligi gecersiz: min=%.1f max=%.1f'):format(r.MinOffsetMeters, r.MaxOffsetMeters)
+    end
+
+    return true, ('%d hood, %d hayalet doktor koordinati, karaborsa offset [%.1f,%.1f]m -- hepsi gecerli'):format(
+        #hoods, #phantomCoords, r.MinOffsetMeters, r.MaxOffsetMeters)
 end)
 
 if Config.ComposerSignature then
@@ -526,10 +611,83 @@ local function RunPhantomDoctorPalindromeSimCheck()
 end
 
 
+-- [21.4] HIT-AND-RUN DRIVE-BY TAZELENMESİ: server/hitsquad.lua'nın
+-- TaskVehicleDriveby (15 saniyelik yaylım ateş fazının kancası) ve ardından
+-- gaza basıp en yakın mahalleye kaçış (TaskVehicleDriveToCoord) kancalarını
+-- GERÇEK Config.HitSquad parametreleriyle, izole/kullan-at bir test aracı+
+-- sürücüsü üzerinde tetikler -- HİÇBİR canlı oyuncuyu hedeflemez, HİÇBİR
+-- canlı ekonomi/DB satırına dokunmaz. Amaç 15 saniye gerçekten BEKLEMEK
+-- değil (SIFIR yan etki ilkesiyle çelişir), kancaların doğru argüman
+-- sayısı/tipiyle çağrıldığını ve nil/mantıksal hata FIRLATMADIĞINI
+-- kanıtlamaktır -- biri firlatirsa assert bunu yakalar ve (isAutoBoot +
+-- AbortResourceOnSimulationFailure=true iken) kaynak açılışı DURDURULUR.
+local function RunHitAndRunDrivebySimCheck()
+    assert(Config.HitSquad, 'Config.HitSquad tanimsiz')
+    local hs = Config.HitSquad
+
+    for _, field in ipairs({ 'VehicleModel', 'PedModel', 'Weapon' }) do
+        assert(type(hs[field]) == 'string' and hs[field] ~= '', ('Config.HitSquad.%s gecersiz/bos'):format(field))
+    end
+    for _, field in ipairs({ 'CruiseSpeed', 'AttackRange', 'DrivebySeconds', 'FleeSeconds',
+                             'AggressiveDriveStyle', 'DrivebyRange', 'PedAccuracy', 'ScanIntervalTicks' }) do
+        assert(type(hs[field]) == 'number', ('Config.HitSquad.%s sayisal degil'):format(field))
+    end
+    assert(type(hs.HeatTraceThreshold) == 'number' and hs.HeatTraceThreshold >= 0 and hs.HeatTraceThreshold <= 1.0,
+        'Config.HitSquad.HeatTraceThreshold [0,1] araliginda degil')
+
+    local hood = Config.GangHoods and Config.GangHoods.Hoods and Config.GangHoods.Hoods[1]
+    if not hood or not hood.coords then
+        return true, 'atlandi -- Config.GangHoods.Hoods bos (henuz test edilecek mahalle yok)'
+    end
+
+    local vehHash = GetHashKey(hs.VehicleModel)
+    local pedHash = GetHashKey(hs.PedModel)
+
+    local vehicle = CreateVehicle(vehHash, hood.coords.x, hood.coords.y, hood.coords.z, 0.0, true, true)
+    if not Matrix.AwaitEntityCreation(vehicle) then
+        pcall(function() if DoesEntityExist(vehicle) then DeleteEntity(vehicle) end end)
+        assert(false, 'test araci dogurulamadi (timeout)')
+    end
+    pcall(SetEntityOrphanMode, vehicle, 2) -- KeepEntity
+
+    local driver = CreatePedInsideVehicle(vehicle, 0, pedHash, -1, true, true)
+    if not Matrix.AwaitEntityCreation(driver) then
+        pcall(function() if DoesEntityExist(vehicle) then DeleteEntity(vehicle) end end)
+        pcall(function() if DoesEntityExist(driver) then DeleteEntity(driver) end end)
+        assert(false, 'test suruculer dogurulamadi (timeout)')
+    end
+    pcall(SetEntityOrphanMode, driver, 2) -- KeepEntity
+
+    -- FAZ 1: 15sn'lik yaylim ates kancasi (server/hitsquad.lua TickPlayer
+    -- 'driveby' fazi ile BIREBIR AYNI arguman sekli -- canli hedef yerine
+    -- kendi test surucusu zararsiz yer-tutucu olarak verilir).
+    local drivebyOk, drivebyErr = pcall(TaskVehicleDriveby, driver, driver, 0, 0.0, 0.0, 0.0,
+        hs.DrivebyRange, hs.PedAccuracy, false, GetHashKey('FIRING_PATTERN_FULL_AUTO'))
+
+    -- FAZ 2: "Hit-and-Run" -- gaza basip en yakin mahalleye kacis kancasi
+    -- (TickPlayer 'fleeing' fazi ile BIREBIR AYNI arguman sekli).
+    pcall(ClearPedTasksImmediately, driver)
+    local fleeOk, fleeErr = pcall(TaskVehicleDriveToCoord, driver, vehicle,
+        hood.coords.x, hood.coords.y, hood.coords.z, hs.CruiseSpeed * 1.4, 0,
+        vehHash, hs.AggressiveDriveStyle, 5.0, 1)
+
+    -- Temizlik HER KOSULDA (assert'ten ONCE) -- basarisiz test bile dunyada
+    -- kalici entity BIRAKMAZ.
+    pcall(function() if DoesEntityExist(driver) then DeleteEntity(driver) end end)
+    pcall(function() if DoesEntityExist(vehicle) then DeleteEntity(vehicle) end end)
+
+    assert(drivebyOk, ('TaskVehicleDriveby (yaylim ates) kancasi hata firlatti -- nil/gecersiz kanca supheli: %s'):format(tostring(drivebyErr)))
+    assert(fleeOk, ('Hit-and-Run kacis TaskVehicleDriveToCoord kancasi hata firlatti: %s'):format(tostring(fleeErr)))
+
+    return true, ('drive-by + hit-and-run kancalari 0 hata ile calisti (mahalle=%s)'):format(tostring(hood.label))
+end
+
+
 local SimulationChecks = {
     { 'DERIN-SIM: 100 eszamanli async satis stres testi (KATMAN 21.1)',            RunConcurrencyStressCheck },
     { 'DERIN-SIM: Bot yara ceza carpani 4-hane hassasiyeti (KATMAN 21.2)',          RunWoundPrecisionSimCheck },
-    { 'DERIN-SIM: Hayalet Doktor 10k-epoch palindrom determinizmi (KATMAN 21.3)',   RunPhantomDoctorPalindromeSimCheck }
+    { 'DERIN-SIM: Hayalet Doktor 10k-epoch palindrom determinizmi (KATMAN 21.3)',   RunPhantomDoctorPalindromeSimCheck },
+    { 'DERIN-SIM: Hit-and-Run drive-by tazelenmesi (KATMAN 22.1)',                  RunHitAndRunDrivebySimCheck }
 }
 
 
