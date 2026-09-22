@@ -328,7 +328,15 @@ local function PickWoundZone(botId)
 end
 
 
-function Matrix.Wounds.ApplyBotRegionalDamage(botId, rawDamage)
+-- ★ KATMAN 21 [SimCheck 21.2]: 3. parametre `forcedZone` opsiyoneldir.
+-- GERCEK oyun akisi (asagidaki AddEventHandler) bu argumani HICBIR ZAMAN
+-- gecmez -- PickWoundZone(botId)'in botId+sayac'a bagli determinizmi
+-- BIREBIR korunur. YALNIZCA server/matrix_diagnostics.lua DERIN katmani,
+-- bir test botunun ID'sine (auto-increment, restart'lar arasi
+-- ONGORULEMEZ) bagimli olmadan hangi uzva hasar dustugunu SABITLEYEREK
+-- 4-hane hassasiyet iddialarini FLAKY OLMAYAN sekilde dogrulamak icin
+-- gecer.
+function Matrix.Wounds.ApplyBotRegionalDamage(botId, rawDamage, forcedZone)
     local bot = Matrix.Bots[botId]
     if not bot then return end
     if bot.status ~= 'active' then return end -- comatose/deceased botlara YENİ hasar dağıtılmaz
@@ -341,7 +349,7 @@ function Matrix.Wounds.ApplyBotRegionalDamage(botId, rawDamage)
         return
     end
 
-    local zone = PickWoundZone(botId)
+    local zone = forcedZone or PickWoundZone(botId)
     w.wound_zone = zone
     local delta = Matrix.Clamp(tonumber(rawDamage) or 0.05, 0.0, 1.0) * 0.25 -- tekil isabet basina kismi birikim
 
@@ -527,13 +535,30 @@ end, false)
 -- [KATMAN 4] HAYALET CERRAH (PHANTOM SURGEON) — deterministik 6 saatlik
 -- rotasyon, epoch-saat sağlama toplamı (RNG YOK).
 -- =====================================================================
+-- ★ KATMAN 21 [SimCheck 21.3]: saf hesaplama epochBucket'i parametre
+-- olarak alacak sekilde AYRISTIRILDI (davranis DEGISMEDI -- Get
+-- PhantomDoctorLocation asagida AYNI formulu Matrix.Now()'dan turetilen
+-- gercek bucket ile cagirir). Bu, diagnostics'in "10.000 epoch ileri/geri"
+-- determinizm testini GERCEK uretim formulunu (bir kopyasini DEGIL)
+-- cagirarak yapmasini saglar.
+local function ComputePhantomIndexForBucket(epochBucket, coordsList)
+    local raw = ('PHANTOM#%d'):format(epochBucket)
+    return (ChecksumOf(raw, 71) % #coordsList) + 1
+end
+
+
 function Matrix.Wounds.GetPhantomDoctorLocation()
     local coordsList = Config.PhantomDoctor.Coords
     local intervalSeconds = (Config.PhantomDoctor.RotationIntervalHours or 6) * 3600
     local epochBucket = math_floor(Matrix.Now() / intervalSeconds)
-    local raw = ('PHANTOM#%d'):format(epochBucket)
-    local idx = (ChecksumOf(raw, 71) % #coordsList) + 1
+    local idx = ComputePhantomIndexForBucket(epochBucket, coordsList)
     return coordsList[idx], idx
+end
+
+
+-- ★ TANI-YALNIZCA: matrix_diagnostics.lua disinda cagirmayin.
+function Matrix.Wounds.__ComputePhantomIndexForEpochBucket(epochBucket)
+    return ComputePhantomIndexForBucket(epochBucket, Config.PhantomDoctor.Coords)
 end
 
 

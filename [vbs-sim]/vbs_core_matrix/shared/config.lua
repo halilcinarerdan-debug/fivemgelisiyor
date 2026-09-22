@@ -1063,7 +1063,38 @@ Config.Forensics.CCTVHackBaseCortisolSpike        = 0.15  -- skill_cyber=0 iken 
 -- =====================================================================
 Config.Diagnostics = {
     RunOnResourceStart = true,
-    DeepModeCommandArg = 'deep'
+    DeepModeCommandArg = 'deep',
+
+    -- =====================================================================
+    -- ★ KATMAN 21: ACIMASIZ DIAGNOSTICS LABORATUVARI ENJEKSIYONU
+    -- Eski KAPSAM KARARI (dosya basi yorumu: "otomatik acilis HER ZAMAN
+    -- hizli katman, ASLA deep") bu GM emriyle BILINCLI olarak GECERSIZ
+    -- KILINDI -- onServerResourceStart ARTIK HER ZAMAN deep=true calistirir
+    -- VE asagidaki 3 SimulationChecks testinden biri basarisiz olursa
+    -- (assert firlatirsa) AbortResourceOnSimulationFailure=true iken
+    -- StopResource ile kaynak acilisini DURDURUR.
+    --
+    -- ★ TEK-SEFERLIK KURULUM GEREKSINIMI (bunlar YOKSA HER ACILISTA
+    -- basarisiz olur ve kaynak KENDINI DURDURUR):
+    --   1) sql/matrix_financial_core.sql calistirilmis olmali (matrix_
+    --      diagnostics_stress_log tablosu icin).
+    --   2) StressTestItem asagida, sunucunuzun GERCEK ox_inventory
+    --      items tablosunda kayitli bir item adiyla DEGISTIRILMELI --
+    --      varsayilan deger bir YER TUTUCUDUR, sizin item listenizde
+    --      YOKSA test HER ACILISTA basarisiz olur.
+    --   3) Acilista guvenmeden ONCE en az bir kez elle
+    --      '/matrix_run_diagnostics deep' ile test edilmesi ONERILIR.
+    -- =====================================================================
+    AbortResourceOnSimulationFailure = true,
+
+    StressTestConcurrency = 100,
+    StressTestStashId     = 'matrix_diagnostics_stress_stash',
+    -- ★ YER TUTUCU: kendi ox_inventory item listenizdeki GERCEK bir item
+    -- adiyla degistirin (bkz. yukaridaki KURULUM notu).
+    StressTestItem        = 'matrix_diagnostic_token',
+    StressTestTimeoutMs   = 15000,
+
+    PhantomPalindromeEpochCount = 10000
 }
 
 -- =====================================================================

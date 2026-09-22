@@ -1288,7 +1288,25 @@ ALTER TABLE `matrix_gang_hoods`
 
 
 -- =====================================================================
--- DOĞRULAMA SORGUSU (opsiyonel — bu dosya çalıştırıldıktan sonra 3 dönmeli)
+-- ★ KATMAN 21: ACIMASIZ DIAGNOSTICS LABORATUVARI -- 100 eszamanli async
+-- satis stres testinin (server/matrix_diagnostics.lua RunConcurrencyStressCheck)
+-- yazdigi kayitlar icin, CANLI ekonomi tablolarindan TAMAMEN izole,
+-- tani-yalnizca bir gunluk. Her calistirmadan sonra run_token'a gore
+-- silinir -- kalici veri BIRIKTIRMEZ.
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS `matrix_diagnostics_stress_log` (
+    `id`           INT AUTO_INCREMENT,
+    `run_token`    VARCHAR(64) NOT NULL,
+    `worker_index` INT         NOT NULL,
+    `removed_ok`   TINYINT     NOT NULL DEFAULT 0,
+    `created_at`   DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    KEY `idx_run_token` (`run_token`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+
+-- =====================================================================
+-- DOĞRULAMA SORGUSU (opsiyonel — bu dosya çalıştırıldıktan sonra 4 dönmeli)
 -- =====================================================================
 -- SELECT COUNT(*) AS underworld_expansion_table_count
 -- FROM information_schema.tables
@@ -1296,5 +1314,6 @@ ALTER TABLE `matrix_gang_hoods`
 --   AND table_name IN (
 --       'matrix_vendor_pool',
 --       'matrix_fragmented_intel',
---       'matrix_gang_hoods'
+--       'matrix_gang_hoods',
+--       'matrix_diagnostics_stress_log'
 --   );
