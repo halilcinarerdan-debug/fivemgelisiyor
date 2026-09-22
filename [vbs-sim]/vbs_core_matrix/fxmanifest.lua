@@ -16,7 +16,9 @@ client_scripts {
     'client/trap_house_client.lua',
     -- ★ Bestecinin İmzası: spawn-sonrası monokrom taktik bülten + opsiyonel
     -- Bach ses katmanı (bkz. shared/config.lua Config.ComposerSignature).
-    'client/composer_intro.lua'
+    'client/composer_intro.lua',
+    -- ★ Yeralti Genisletmesi KATMAN 1: fiziksel muhafiz/kurye takipci botlari.
+    'client/mercenary_followers.lua'
 }
 
 server_scripts {
@@ -34,6 +36,16 @@ server_scripts {
     'server/trap_house_interior.lua',
     'server/workbench.lua',
     'server/door_reinforcement.lua',
+    -- ★ Yeralti Genisletmesi (KATMAN 1-7): fiziksel takipciler, yasal
+    -- hastane/adli sorgu + Arma-tarzi bot yaralanmasi + Hayalet Cerrah,
+    -- deterministik satici agi + parcalanmis istihbarat, dusman mahalleleri.
+    -- Bureau/Forensics/Market/Logistics'in ZATEN YUKLENMIS olmasi gerektigi
+    -- icin listede ONLARDAN SONRA yer alir (Matrix.Bureau/Matrix.Forensics/
+    -- Matrix.Market fonksiyonlarini dogrudan cagirirlar).
+    'server/wound_system.lua',
+    'server/underworld_network.lua',
+    'server/gang_hoods.lua',
+    'server/mercenary_followers.lua',
     -- ★ Otomasyonlu Regresyon Çekirdeği: diğer TÜM server dosyalarının
     -- Matrix.* kancalarını okuduğu için listenin EN SONUNDA (yalnızca
     -- okunabilirlik için -- kontroller run-time'da çalıştığından, o ana

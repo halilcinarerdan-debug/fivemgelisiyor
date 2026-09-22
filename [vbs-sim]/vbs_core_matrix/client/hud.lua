@@ -524,6 +524,34 @@ end, false)
 RegisterKeyMapping('silahtahliye', 'Sikisan Silahi Tahliye Et (Tutukluk Giderme)', 'keyboard', 'X')
 
 
+-- =====================================================================
+-- ★ YERALTI GENISLETMESI KATMAN 2: OYUNCU-HASAR TESPITI
+-- Vanilla 'CEventNetworkEntityDamage' gameEventTriggered'i, yerel oyuncu
+-- kurbanken YALNIZCA sunucuya bir bildirim gonderir -- server/wound_
+-- system.lua bunu, o saldirganin EN SON ates ettigi silahin (ZATEN VAR
+-- OLAN reportWeaponShotFired onbellegi) balistik imzasiyla eslestirir.
+-- =====================================================================
+AddEventHandler('gameEventTriggered', function(eventName, args)
+    if eventName ~= 'CEventNetworkEntityDamage' then return end
+
+    -- CEventNetworkEntityDamage args: [1]=victim [2]=attacker [3]=weaponDamage(bool)
+    -- [4]=victimDied(bool) [5]=weaponType(bool) [6]=weaponHash [7]=baseDamage
+    -- -- yalnizca YEREL oyuncu kurbanken ve gercek bir silah hasari varken islenir.
+    local victim, attacker, weaponDamage, weaponHash = args[1], args[2], args[3], args[6]
+    if victim ~= PlayerPedId() or not weaponDamage then return end
+
+    local attackerServerId = nil
+    if attacker and attacker ~= 0 and NetworkGetEntityIsNetworked(attacker) then
+        if IsPedAPlayer(attacker) then
+            attackerServerId = GetPlayerServerId(NetworkGetPlayerIndexFromPed(attacker))
+        end
+    end
+
+    local weaponHashStr = weaponHash and tostring(weaponHash) or nil
+    TriggerServerEvent('matrix:server:reportPlayerWounded', attackerServerId, weaponHashStr)
+end)
+
+
 --- ★ [U3] F10 -> "/namludegistir": elde tutulan silahin slotunu ox_inventory
 --- GetCurrentWeapon export'undan cozup sunucu komutuna [S1] disiplinindeki
 --- gibi yalnizca temiz bir tam sayi olarak iletir.
@@ -1814,6 +1842,163 @@ end, false)
 RegisterKeyMapping('notdefteri', 'Operasyon Not Defterini Ac (F10 disinda dogrudan)', 'keyboard', 'L')
 
 
+-- =====================================================================
+-- ★ YERALTI GENISLETMESI (KATMAN 1-7): fiziksel takipciler, yasal
+-- hastane/adli sorgu, Arma-tarzi bot yaralanmasi + Hayalet Cerrah,
+-- deterministik satici agi + parcalanmis istihbarat, dusman mahalleleri.
+-- Diger F10 alt menuleriyle AYNI lib.inputDialog/ExecuteCommand deseni
+-- kullanilir -- yeni bir NUI cercevesi ACILMAZ.
+-- =====================================================================
+local function OpenPhantomDoctorDialog()
+    local input = lib.inputDialog('/hayaletcerrah - Hayalet Cerrah Ameliyati', {
+        { type = 'number', label = 'Bot ID (kalici sakat)', required = true, min = 1, max = MAX_BOT_ID }
+    })
+    if not input then return end
+    local botId = SanitizeNumericArg(input[1], 1, MAX_BOT_ID)
+    if not botId then NotifyInvalidInput('Bot ID gecersiz.'); return end
+    ExecuteCommand(('hayaletcerrah %s'):format(botId))
+end
+
+
+local function OpenTrapHouseTreatmentDialog()
+    local input = lib.inputDialog('Karaborsa Ameliyati (Trap House Tedavisi)', {
+        { type = 'number', label = 'Bot ID (yarali)', required = true, min = 1, max = MAX_BOT_ID }
+    })
+    if not input then return end
+    local botId = SanitizeNumericArg(input[1], 1, MAX_BOT_ID)
+    if not botId then NotifyInvalidInput('Bot ID gecersiz.'); return end
+    ExecuteCommand(('kadroameliyat %s'):format(botId))
+end
+
+
+local function OpenWoundInterrogationDialog()
+    local input = lib.inputDialog('Yatak Basi Adli Sorgu Cevabi', {
+        { type = 'select', label = 'Cevap', required = true, options = {
+            { value = 'itiraf', label = 'Itiraf Et' },
+            { value = 'inkar',  label = 'Inkar Et (Yalan)' }
+        } }
+    })
+    if not input then return end
+    ExecuteCommand(('yarasorgucevap %s'):format(input[1]))
+end
+
+
+local function OpenVendorInterrogateDialog()
+    local input = lib.inputDialog('/zorkullan - Satici Sorgusu', {
+        { type = 'number', label = 'Satici ID', required = true, min = 1, max = 2147483646 }
+    })
+    if not input then return end
+    local vendorId = SanitizeNumericArg(input[1], 1, 2147483646)
+    if not vendorId then NotifyInvalidInput('Satici ID gecersiz.'); return end
+    ExecuteCommand(('zorkullan %s'):format(vendorId))
+end
+
+
+local function OpenProsecutorBribeDialog()
+    local input = lib.inputDialog('/savcitasaboteet - Savciyi Satin Al', {
+        { type = 'input', label = 'Sanik Citizenid', required = true, max = 50 }
+    })
+    if not input then return end
+    ExecuteCommand(('savcitasaboteet %s'):format(input[1]))
+end
+
+
+local function OpenGangHoodDestroyDialog()
+    local input = lib.inputDialog('/depoyuyak - Kalan Yagmayi Yok Et', {
+        { type = 'number', label = 'Mahalle ID', required = true, min = 1, max = 2147483646 }
+    })
+    if not input then return end
+    local hoodId = SanitizeNumericArg(input[1], 1, 2147483646)
+    if not hoodId then NotifyInvalidInput('Mahalle ID gecersiz.'); return end
+    ExecuteCommand(('depoyuyak %s'):format(hoodId))
+end
+
+
+local function OpenFrameUpCheckDialog()
+    local input = lib.inputDialog('/kanityukle - Suc Yukleme Kontrolu (Ust Arama)', {
+        { type = 'number', label = 'Supheli Server ID', required = true, min = 1, max = 65535 },
+        { type = 'number', label = 'Silah Slotu',          required = true, min = 0, max = 255 }
+    })
+    if not input then return end
+    local suspectSrc = SanitizeNumericArg(input[1], 1, 65535)
+    local slot        = SanitizeNumericArg(input[2], 0, 255)
+    if not suspectSrc or not slot then NotifyInvalidInput('Girdi gecersiz.'); return end
+    ExecuteCommand(('kanityukle %s %s'):format(suspectSrc, slot))
+end
+
+
+local function OpenUnderworldExpansionMenu()
+    lib.registerContext({
+        id = 'matrix_underworld_menu',
+        title = '=== YERALTI GENISLETMESI ===',
+        menu = 'matrix_tactical_menu',
+        options = {
+            {
+                title       = 'Muhafiz Cagir',
+                description = ('En fazla %d fiziksel muhafiz/kurye botu cagirir -- catismada seni savunur, araca otonom biner'):format(Config.Mercenary.MaxFollowers or 2),
+                icon        = 'user-shield',
+                onSelect    = function() ExecuteCommand('muhafizcagir') end
+            },
+            {
+                title       = 'Muhafizlari Salla',
+                description = 'Tum aktif fiziksel takipcileri serbest birak',
+                icon        = 'user-slash',
+                onSelect    = function() ExecuteCommand('muhafizsalla') end
+            },
+            {
+                title       = 'Tedavi Ol (/tedaviol)',
+                description = 'Yasal hastane check-in noktasindayken yarayi kapat -- ANINDA Buro sizintisi tetiklenir',
+                icon        = 'staff-snake',
+                onSelect    = function() ExecuteCommand('tedaviol') end
+            },
+            {
+                title       = 'Yatak Basi Sorgu Cevapla',
+                description = 'Acik bir adli sorgu oturumuna itiraf/inkar (yalan mahkumiyet skorunu %40 tirmandirir)',
+                icon        = 'comment-medical',
+                onSelect    = OpenWoundInterrogationDialog
+            },
+            {
+                title       = 'Karaborsa Ameliyati (Trap House)',
+                description = 'Yarali bir botu Trap House tedavisine al -- 12 saat dispatch kabul edemez',
+                icon        = 'kit-medical',
+                onSelect    = OpenTrapHouseTreatmentDialog
+            },
+            {
+                title       = 'Hayalet Cerrah Ameliyati',
+                description = 'Kalici sakat bir botu $60,000 karsiliginda 24s ameliyata al (doktorun o anki konumundayken)',
+                icon        = 'user-doctor',
+                onSelect    = OpenPhantomDoctorDialog
+            },
+            {
+                title       = '/zorkullan - Satici Sorgusu',
+                description = 'Bir saticiyi ele gecir -- basarili olursa dusman kartel guvenli-ev koordinati sizar',
+                icon        = 'user-secret',
+                onSelect    = OpenVendorInterrogateDialog
+            },
+            {
+                title       = '/savcitasaboteet',
+                description = 'Bir sanigin acik davasinin Mahkumiyet Skorunu %20 dusur',
+                icon        = 'gavel',
+                onSelect    = OpenProsecutorBribeDialog
+            },
+            {
+                title       = '/depoyuyak - Yagmayi Yok Et',
+                description = 'Dusman mahalle stashindeki kalan yagmayi yok et, sahnedeki adli kaniti temizle',
+                icon        = 'fire',
+                onSelect    = OpenGangHoodDestroyDialog
+            },
+            {
+                title       = '/kanityukle - Suc Yukleme Kontrolu',
+                description = 'Yagma silahinin [ORIGIN: BLOODY LOOT] etiketini denetle -- tasiyan supheliye islenmemis cinayetleri yukler',
+                icon        = 'magnifying-glass',
+                onSelect    = OpenFrameUpCheckDialog
+            }
+        }
+    })
+    lib.showContext('matrix_underworld_menu')
+end
+
+
 OpenTacticalMenu = function()
     lib.registerContext({
         id = 'matrix_tactical_menu',
@@ -1920,6 +2105,12 @@ OpenTacticalMenu = function()
                 description = 'Tum bot matrisini (biyoloji/psikoloji) dokum et',
                 icon        = 'terminal',
                 onSelect    = OpenMatrixDump
+            },
+            {
+                title       = 'Yeralti Genisletmesi',
+                description = 'Fiziksel muhafizlar, yasal hastane/adli sorgu, Hayalet Cerrah, satici agi, dusman mahalleleri',
+                icon        = 'skull-crossbones',
+                onSelect    = OpenUnderworldExpansionMenu
             }
         }
     })
