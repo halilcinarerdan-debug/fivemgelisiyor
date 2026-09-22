@@ -39,7 +39,7 @@
 -- SIFIR RNG: her kontrol saf/deterministiktir -- aynı config + aynı DB
 -- durumu HER ZAMAN aynı raporu üretir.
 --
--- ★★★ KATMAN 22 GÜNCELLEMESİ: 3 yeni bekçi eklendi -- (1) Config Ped
+-- ★★★ KATMAN 22 GÜNCELLEMESİ: 4 yeni bekçi eklendi -- (1) Config Ped
 -- Bekçisi: Config.BotPedConfiguration'daki runner/lookout/chemist/
 -- inspector rütbelerinin katı string ped modeline bağlı olduğunu FastChecks
 -- içinde doğrular. (2) Koordinat Kusursuzluğu: 3 düşman hood bölgesi, 5
@@ -47,13 +47,24 @@
 -- harita sınırları içinde/sayısal olarak geçerli olduğunu FastChecks
 -- içinde doğrular. (3) DERİN-SIM Hit-and-Run Drive-By Tazelenmesi:
 -- server/hitsquad.lua'nın TaskVehicleDriveby + Hit-and-Run kaçış
--- kancalarını izole bir test araç/sürücü çiftiyle tetikler, SimulationChecks
+-- kancalarını izole bir test araç/sürücü çiftiyle tetikler. (4) DERİN-SIM
+-- Medikal/Büro Sızıntı Doğrulaması: server/wound_system.lua'nın
+-- has_wound==1 -> /tedaviol tedavi zincirinin dayandığı SAF 2x katlanma
+-- formülünü (Matrix.Wounds.ComputeBureauLeakMultiplier -- GERÇEK üretim
+-- fonksiyonu, ConVar'a HİÇ dokunmadan) doğrular. (3) ve (4) SimulationChecks
 -- içinde YALNIZCA deep=true iken çalışır. Bu güncellemeyle mühürleme
 -- barajı DÜRÜSTÇE yükseldi: hızlı katman 44 (FastChecks) + 15 (DbChecks)
--- = 59/59; deep=true iken +1 (Çıkış Köprüsü) +4 (SimulationChecks,
--- Hit-and-Run dahil) = 64/64. Bu sayılar #checks üzerinden HER ZAMAN
--- OTOMATİK hesaplanır -- burada elle senkronize edilmesi gereken ayrı bir
--- sabit YOKTUR.
+-- = 59/59; deep=true iken +1 (Çıkış Köprüsü) +5 (SimulationChecks, Hit-
+-- and-Run ve Medikal/Büro sızıntısı dahil) = 65/65. Bu sayılar #checks
+-- üzerinden HER ZAMAN OTOMATİK hesaplanır -- burada elle senkronize
+-- edilmesi gereken ayrı bir sabit YOKTUR.
+--
+-- ★ [EMNİYET KİLİDİ] KATMAN 22: Config.Diagnostics.AbortResourceOnSimulation
+-- Failure artık VARSAYILAN OLARAK false -- otomatik açılışta bir
+-- SimulationChecks testi başarısız olsa BİLE kaynak StopResource ile
+-- FİZİKSEL OLARAK DURDURULMAZ; her başarısızlık yine tüm ayrıntısıyla
+-- (hangi kontrol, hangi sapma) konsola/lastReport'a düşer, yalnızca
+-- açılışı FELÇ ETMEZ (bkz. shared/config.lua Config.Diagnostics notu).
 -- =====================================================================
 
 Matrix.Diagnostics = Matrix.Diagnostics or {}
@@ -683,11 +694,54 @@ local function RunHitAndRunDrivebySimCheck()
 end
 
 
+-- [22.2] MEDİKAL/BÜRO SIZINTI DOĞRULAMASI: server/wound_system.lua'nın
+-- has_wound==1 -> /tedaviol -> LeakToBureauOnTreatment zincirinin dayandığı
+-- SAF formülü (Matrix.Wounds.ComputeBureauLeakMultiplier -- GERÇEK üretim
+-- fonksiyonunun KENDİSİ, bir kopyası DEĞİL) doğrular. matrix_bureau_intensity
+-- ConVar'ına ASLA dokunmaz, hiçbir oyuncu/DB satırı OKUMAZ/YAZMAZ -- tamamen
+-- yan-etkisiz, saf sayısal bir kanıt.
+local function RunMedicalBureauLeakSimCheck()
+    assert(type(Matrix.Wounds.ComputeBureauLeakMultiplier) == 'function',
+        'Matrix.Wounds.ComputeBureauLeakMultiplier tanimli degil')
+    assert(type(Config.Hospital) == 'table', 'Config.Hospital tanimsiz')
+    assert(type(Config.Hospital.LeakIntensityMultiplier) == 'number' and Config.Hospital.LeakIntensityMultiplier > 1.0,
+        ('Config.Hospital.LeakIntensityMultiplier gecersiz (2x katlanma bekleniyor): %s'):format(tostring(Config.Hospital.LeakIntensityMultiplier)))
+
+    local EPS = 0.00005
+
+    -- Normal taban: 1.0 yogunluk -> tam olarak LeakIntensityMultiplier'a sizar.
+    local spiked, mult = Matrix.Wounds.ComputeBureauLeakMultiplier(1.0)
+    local expected = 1.0 * Config.Hospital.LeakIntensityMultiplier
+    assert(math.abs(spiked - expected) < EPS,
+        ('has_wound==1 medikal sizinti formulu sapmasi: beklenen=%.4f gercek=%.4f'):format(expected, spiked))
+    assert(math.abs(mult - Config.Hospital.LeakIntensityMultiplier) < EPS,
+        'donen carpan Config.Hospital.LeakIntensityMultiplier ile uyusmuyor')
+
+    -- Gecersiz/negatif/NaN ConVar girdisi -- production ile BIREBIR AYNI
+    -- 1.0 taban fallback'i dogrulanir.
+    local nanValue = 0.0 / 0.0
+    for _, badInput in ipairs({ -5.0, 0.0, nanValue }) do
+        local fallbackSpiked = Matrix.Wounds.ComputeBureauLeakMultiplier(badInput)
+        assert(math.abs(fallbackSpiked - expected) < EPS,
+            ('gecersiz girdi (%s) icin 1.0 taban fallback formulu bozuk: gercek=%.4f'):format(tostring(badInput), fallbackSpiked))
+    end
+
+    -- Farkli bir gercekci yogunluk (2.35) ile de carpim dogru mu?
+    local spiked2 = Matrix.Wounds.ComputeBureauLeakMultiplier(2.35)
+    local expected2 = 2.35 * Config.Hospital.LeakIntensityMultiplier
+    assert(math.abs(spiked2 - expected2) < EPS,
+        ('2.35 taban icin sizinti sapmasi: beklenen=%.4f gercek=%.4f'):format(expected2, spiked2))
+
+    return true, ('taban=1.00 -> sizinti=%.2f (x%.1f), 3 gecersiz-girdi fallback + 1 farkli-taban dogrulandi'):format(spiked, mult)
+end
+
+
 local SimulationChecks = {
     { 'DERIN-SIM: 100 eszamanli async satis stres testi (KATMAN 21.1)',            RunConcurrencyStressCheck },
     { 'DERIN-SIM: Bot yara ceza carpani 4-hane hassasiyeti (KATMAN 21.2)',          RunWoundPrecisionSimCheck },
     { 'DERIN-SIM: Hayalet Doktor 10k-epoch palindrom determinizmi (KATMAN 21.3)',   RunPhantomDoctorPalindromeSimCheck },
-    { 'DERIN-SIM: Hit-and-Run drive-by tazelenmesi (KATMAN 22.1)',                  RunHitAndRunDrivebySimCheck }
+    { 'DERIN-SIM: Hit-and-Run drive-by tazelenmesi (KATMAN 22.1)',                  RunHitAndRunDrivebySimCheck },
+    { 'DERIN-SIM: Medikal/Buro sizinti 2x katlanma formulu (KATMAN 22.2)',          RunMedicalBureauLeakSimCheck }
 }
 
 
@@ -735,8 +789,8 @@ function Matrix.Diagnostics.Run(deep, replyTo, isAutoBoot)
                 }
             end
 
-            -- ★ KATMAN 21: 3 acimasiz stres-test simulasyonu -- YALNIZCA
-            -- deep=true iken (bkz. yukaridaki SimulationChecks tanimi).
+            -- ★ KATMAN 21-22: acimasiz stres-test simulasyonlari (#SimulationChecks
+            -- tane -- bkz. yukaridaki tanim) -- YALNIZCA deep=true iken.
             for _, c in ipairs(SimulationChecks) do
                 checks[#checks + 1] = RunCheck(c[1], c[2])
             end

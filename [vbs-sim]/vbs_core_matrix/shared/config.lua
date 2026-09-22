@@ -1082,16 +1082,28 @@ Config.Diagnostics = {
     DeepModeCommandArg = 'deep',
 
     -- =====================================================================
-    -- ★ KATMAN 21: ACIMASIZ DIAGNOSTICS LABORATUVARI ENJEKSIYONU
+    -- ★ KATMAN 21-22: ACIMASIZ DIAGNOSTICS LABORATUVARI ENJEKSIYONU
     -- Eski KAPSAM KARARI (dosya basi yorumu: "otomatik acilis HER ZAMAN
     -- hizli katman, ASLA deep") bu GM emriyle BILINCLI olarak GECERSIZ
     -- KILINDI -- onServerResourceStart ARTIK HER ZAMAN deep=true calistirir
-    -- VE asagidaki 3 SimulationChecks testinden biri basarisiz olursa
-    -- (assert firlatirsa) AbortResourceOnSimulationFailure=true iken
-    -- StopResource ile kaynak acilisini DURDURUR.
+    -- VE SimulationChecks testlerinden biri basarisiz olursa (assert
+    -- firlatirsa) AbortResourceOnSimulationFailure=true iken StopResource
+    -- ile kaynak acilisini DURDURUR.
     --
-    -- ★ TEK-SEFERLIK KURULUM GEREKSINIMI (bunlar YOKSA HER ACILISTA
-    -- basarisiz olur ve kaynak KENDINI DURDURUR):
+    -- ★ [EMNİYET KİLİDİ] KATMAN 22 GÜNCELLEMESİ (GM emriyle BİLİNÇLİ
+    -- olarak false'a çekildi): sunucu açılışı artık simülasyon
+    -- başarısızlığında StopResource ile FİZİKSEL OLARAK DURDURULMAZ --
+    -- her SimulationChecks testi (Hit-and-Run drive-by, medikal/Büro 2x
+    -- sızıntı formülü, bot yara hassasiyeti, eşzamanlılık stresi, Hayalet
+    -- Doktor palindromu dahil) yine EKSİKSİZ ve ACIMASIZCA çalışır ve
+    -- rapora düşer (konsolda [%d HATA] olarak veya Matrix.Diagnostics.
+    -- GetLastReport()/composer_intro bültenine sealed=false olarak
+    -- yansır) -- yalnızca kaynağın kendi açılışını felç ETMEZ. true'ya
+    -- geri çekmek isteyen bir GM, açılıştan ÖNCE en az bir kez elle
+    -- '/matrix_run_diagnostics deep' ile testi doğrulamalıdır.
+    --
+    -- ★ TEK-SEFERLIK KURULUM GEREKSINIMI (bunlar YOKSA testler basarisiz
+    -- RAPORLANIR -- artik kaynagi DURDURMAZ, yalnizca konsolda gorunur):
     --   1) sql/matrix_financial_core.sql calistirilmis olmali (matrix_
     --      diagnostics_stress_log tablosu icin).
     --   2) StressTestItem asagida, sunucunuzun GERCEK ox_inventory
@@ -1101,7 +1113,7 @@ Config.Diagnostics = {
     --   3) Acilista guvenmeden ONCE en az bir kez elle
     --      '/matrix_run_diagnostics deep' ile test edilmesi ONERILIR.
     -- =====================================================================
-    AbortResourceOnSimulationFailure = true,
+    AbortResourceOnSimulationFailure = false,
 
     StressTestConcurrency = 100,
     StressTestStashId     = 'matrix_diagnostics_stress_stash',

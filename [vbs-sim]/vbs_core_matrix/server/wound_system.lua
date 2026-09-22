@@ -162,14 +162,28 @@ local function EnsureWoundColumnsLoaded(state)
 end
 
 
+--- Saf/yan-etkisiz çarpım formülü (ConVar'a HİÇ DOKUNMAZ) -- LeakToBureauOnTreatment
+--- ve matrix_diagnostics.lua'nın deep-sim testi BUNU çağırır, böylece test
+--- gerçek matrix_bureau_intensity ConVar'ını okuyup/yazmadan (0 yan etki)
+--- ÜRETİMDEKİ AYNI formülü doğrulayabilir. Geçersiz/negatif/NaN girdi 1.0
+--- tabanına düşer (production ile BİREBİR AYNI davranış).
+function Matrix.Wounds.ComputeBureauLeakMultiplier(currentIntensity)
+    if type(currentIntensity) ~= 'number' or currentIntensity ~= currentIntensity or currentIntensity <= 0.0 then
+        currentIntensity = 1.0
+    end
+    local mult = Config.Hospital.LeakIntensityMultiplier or 2.0
+    return currentIntensity * mult, mult, currentIntensity
+end
+
+
 --- Tedavi başarıyla tamamlanır (yara kapanır) FAKAT tıbbi rapor ANINDA
 --- Büro'ya sızar -- matrix_bureau_intensity ConVar'i bu tekil olayda
 --- 2 KATINA çıkar (server/bureau.lua'nın Matrix.Bureau.GetBureaucraticVelocity
 --- OKUDUĞU AYNI ConVar).
 local function LeakToBureauOnTreatment(citizenid, ballisticId)
     local current = GetConvarFloat('matrix_bureau_intensity', 1.0)
-    if type(current) ~= 'number' or current ~= current or current <= 0.0 then current = 1.0 end
-    local spiked = current * (Config.Hospital.LeakIntensityMultiplier or 2.0)
+    local spiked, mult, correctedCurrent = Matrix.Wounds.ComputeBureauLeakMultiplier(current)
+    current = correctedCurrent
     SetConvar('matrix_bureau_intensity', tostring(spiked))
 
     local nearestId = nil
@@ -184,7 +198,7 @@ local function LeakToBureauOnTreatment(citizenid, ballisticId)
     end
 
     Matrix.Log('WOUNDS', '[TIBBI SIZINTI] %s tedavi oldu -- matrix_bureau_intensity %.3f -> %.3f (x%.1f).',
-        citizenid, current, spiked, Config.Hospital.LeakIntensityMultiplier or 2.0)
+        citizenid, current, spiked, mult)
 end
 
 
