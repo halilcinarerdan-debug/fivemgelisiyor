@@ -1225,6 +1225,15 @@ function Matrix.Inspector.ScanForMoles()
                             '[SIGINT ANOMALISI: KOSTEBEK/MUHBIR DOGRULANDI] Bot #%d (Bolge #%d, Denetleyici Bot #%d) snitch_tendency=%.3f',
                             botId, zoneId, inspectorBotId, bot.psychology.snitch_tendency)
                         BroadcastMoleBulletin(botId, zoneId, inspectorBotId, bot.psychology.snitch_tendency)
+                        -- ★ [YERALTI AGI KATMAN 6] Guard'li tek-satirlik gozlemci --
+                        -- server/underworld_network.lua'nin Sting mekanigi (yuklu ise)
+                        -- bu koestebek isaretini en yakin Satici contact'ina compromised
+                        -- olarak yansitir. Modul yuklu degilse davranis birebir eskisiyle
+                        -- AYNIDIR (TriggerEvent dinleyicisiz sessizce no-op'tur).
+                        local hookOk, hookErr = pcall(function() TriggerEvent('matrix:internal:mole_flagged', botId) end)
+                        if not hookOk then
+                            Matrix.Log('MARKET', '[HATA] mole_flagged hook basarisiz (yutuldu): %s', tostring(hookErr))
+                        end
                     end
                 end
             end

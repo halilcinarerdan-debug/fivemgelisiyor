@@ -627,6 +627,41 @@ Config.Rendezvous = {
 }
 
 
+-- =====================================================================
+-- ★★★ KATMAN 8: DÜŞMAN HÜCUM EKİBİ — "DRIVE-BY" TAKİP MOTORU ★★★
+-- server/hitsquad.lua'nın Config sözleşmesi. Hedefleme, server/rendezvous.
+-- lua [R2] İLE AYNI trace-level formülünü (Matrix.Bureau.GetHeat / Config.
+-- Bureau.CyberLeakMaxIntensity) yeniden kullanır — ikinci bir "ısı" alanı
+-- İCAT EDİLMEZ. RNG YOK: eşik karşılaştırması + sabit süreli fazlar.
+-- =====================================================================
+-- NOT: Config.GangHoods bu dosyada TEK bir yerde tanimlanir (asagida,
+-- [KATMAN 7] blogunda, Config.GangHoods.Hoods sekli). KATMAN 8 kendi
+-- ayri dizisini ICAT ETMEZ -- ayni mahalle listesini paylasir (bkz.
+-- server/hitsquad.lua: Config.GangHoods.Hoods uzerinde doner).
+Config.HitSquad = {
+    -- Config.Rendezvous.AmbushTraceLevelThreshold İLE PAYLAŞILAN eşik —
+    -- KATMAN 6'nın "ne zaman tehlikeli" tanımıyla ÇELİŞMEZ.
+    HeatTraceThreshold = Config.Rendezvous.AmbushTraceLevelThreshold,
+
+    -- Hedefleme taraması main.lua'nın bureauAccumulator deseniyle AYNI
+    -- TARZDA, Config.Tick.IntervalMs'e göre birikimli sayılır — HER TICK
+    -- ÇALIŞMAZ.
+    ScanIntervalTicks = 5,
+
+    AttackRange      = 12.0,
+    DrivebyRange      = 60.0,
+    DrivebySeconds    = 15,
+    FleeSeconds       = 20,
+    CruiseSpeed       = 18.0,
+    AggressiveDriveStyle = 16777216,
+
+    VehicleModel = 'sultan2',
+    PedModel     = 'g_m_y_ballasout_01',
+    Weapon       = 'WEAPON_MICROSMG',
+    PedAccuracy  = 70
+}
+
+
 -- ---------------------------------------------------------------------
 -- [K6-2] SANAL MAHALLE EVİ (INTERIOR INSTANCE)
 -- Fütüristik/high-tech sığınak YASAK — vanilla GTA V döküntü iç mekan
@@ -1028,7 +1063,38 @@ Config.Forensics.CCTVHackBaseCortisolSpike        = 0.15  -- skill_cyber=0 iken 
 -- =====================================================================
 Config.Diagnostics = {
     RunOnResourceStart = true,
-    DeepModeCommandArg = 'deep'
+    DeepModeCommandArg = 'deep',
+
+    -- =====================================================================
+    -- ★ KATMAN 21: ACIMASIZ DIAGNOSTICS LABORATUVARI ENJEKSIYONU
+    -- Eski KAPSAM KARARI (dosya basi yorumu: "otomatik acilis HER ZAMAN
+    -- hizli katman, ASLA deep") bu GM emriyle BILINCLI olarak GECERSIZ
+    -- KILINDI -- onServerResourceStart ARTIK HER ZAMAN deep=true calistirir
+    -- VE asagidaki 3 SimulationChecks testinden biri basarisiz olursa
+    -- (assert firlatirsa) AbortResourceOnSimulationFailure=true iken
+    -- StopResource ile kaynak acilisini DURDURUR.
+    --
+    -- ★ TEK-SEFERLIK KURULUM GEREKSINIMI (bunlar YOKSA HER ACILISTA
+    -- basarisiz olur ve kaynak KENDINI DURDURUR):
+    --   1) sql/matrix_financial_core.sql calistirilmis olmali (matrix_
+    --      diagnostics_stress_log tablosu icin).
+    --   2) StressTestItem asagida, sunucunuzun GERCEK ox_inventory
+    --      items tablosunda kayitli bir item adiyla DEGISTIRILMELI --
+    --      varsayilan deger bir YER TUTUCUDUR, sizin item listenizde
+    --      YOKSA test HER ACILISTA basarisiz olur.
+    --   3) Acilista guvenmeden ONCE en az bir kez elle
+    --      '/matrix_run_diagnostics deep' ile test edilmesi ONERILIR.
+    -- =====================================================================
+    AbortResourceOnSimulationFailure = true,
+
+    StressTestConcurrency = 100,
+    StressTestStashId     = 'matrix_diagnostics_stress_stash',
+    -- ★ YER TUTUCU: kendi ox_inventory item listenizdeki GERCEK bir item
+    -- adiyla degistirin (bkz. yukaridaki KURULUM notu).
+    StressTestItem        = 'matrix_diagnostic_token',
+    StressTestTimeoutMs   = 15000,
+
+    PhantomPalindromeEpochCount = 10000
 }
 
 -- =====================================================================
@@ -1058,6 +1124,185 @@ Config.ComposerSignature = {
     counterpointLeadMs     = 2500, -- introDurationMs'in SON bu kadarlik dilimi (sadece rapor 'sealed' ise)
     bulletinLineIntervalMs = 220,  -- taktik bulten satirlarinin akma hizi
     fadeOutMs              = 600   -- introDurationMs'in SON bu kadarlik dilimi: alfa 235'ten 0'a lineer iner
+}
+
+-- =====================================================================
+-- ★★★ YERALTI FİZİKSEL SAVAŞ + KARA TIP + SIZDIRILAN İSTİHBARAT
+-- GENİŞLEMESİ (7 katmanlı görev seti) ★★★
+-- Aşağıdaki bloklar TAMAMEN YENİ EKLEMELERDİR. Yukarıdaki hiçbir alan/
+-- tablo/formül DEĞİŞTİRİLMEDİ.
+-- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- [KATMAN 1] FİZİKSEL MUHAFIZ/KURYE BOTLARI + ARAÇ KOMUTU
+-- ---------------------------------------------------------------------
+Config.Mercenary = {
+    EnablePhysicalFollowers = true,
+
+    MaxFollowers        = 2,
+    PedModel             = 'g_m_y_mexgoon_02',
+    SummonRadius         = 3.0,
+    FollowDistance       = 3.0,
+    -- Bu mesafenin ÜZERİNDE (oyuncudan koptuysa) takipçi ışınlanarak
+    -- yeniden konumlanır -- sonsuz NavMesh kilitlenmesini önler.
+    TeleportDistance      = 60.0,
+    VehicleEnterRadius    = 10.0,
+    CombatAggroRadius     = 35.0,
+    -- Performans: mesafe/araç kontrolleri her frame DEĞİL, bu aralıkta
+    -- çalışan hafif bir önbellek üzerinden yürütülür.
+    CheckIntervalMs       = 1500,
+    SummonCooldownMs      = 5000
+}
+
+-- ---------------------------------------------------------------------
+-- [KATMAN 2] YASAL HASTANE (EMS) ADLİ SORGU / TIBBİ SIZINTI DÖNGÜSÜ
+-- Karakter Wipe kararı, ZATEN VAR OLAN /davaac + /davasorgula mahkeme
+-- ifade zinciriyle (server/bureau.lua Matrix.Bureau.ExecuteVerdict) AYNI
+-- nihai infaz fonksiyonunu paylaşır -- ikinci bir "wipe" yolu İCAT EDİLMEZ.
+-- ---------------------------------------------------------------------
+Config.Hospital = {
+    Enabled           = true,
+    TreatmentCommand  = 'tedaviol',
+    CheckInPoints = {
+        { id = 1, label = 'Pillbox Hill Tibbi Merkezi', coords = vector3(298.72, -584.77, 43.25), radius = 8.0 }
+    },
+    -- Tedavi aninda Buro'ya ANINDA sizan tibbi rapor: matrix_bureau_intensity
+    -- ConVar'ini bu carpanla aninda katlar (bkz. server/wound_system.lua).
+    LeakIntensityMultiplier      = 2.0,
+    -- Yatak-basi sorgu: yalan soylemek MEVCUT TrialConviction geometrik
+    -- bicimiyle AYNI sekilde tirmanir, fakat gorevin istedigi sabit %40
+    -- artisla (bkz. Config.Bureau.TrialConvictionIncrement'in AKSINE, bu
+    -- akis kendi sabit adimini kullanir -- yatak basi sorgu bir memurun
+    -- yonettigi resmi dava DEGIL, EMS/Buro sizintisi kaynakli otonom bir
+    -- mini-dava oldugu icin ayri bir sabit tutulur).
+    ConvictionWeightLiePenalty   = 0.40,
+    ConvictionWipeThreshold      = 1.0
+}
+
+-- ---------------------------------------------------------------------
+-- [KATMAN 3/4] ARMA-TARZI BÖLGESEL BOT YARALANMA + KALICI SAKATLIK
+-- ---------------------------------------------------------------------
+Config.BotWounds = {
+    -- Deterministik bölge seçimi (RNG YOK): ChecksumOf(botId#hasarSayaci)
+    -- bu listenin indeksine kirpilir -- bkz. server/wound_system.lua.
+    ZoneOrder                = { 'leg', 'head', 'arm', 'torso' },
+
+    LegSpeedPenalty          = 0.60,  -- -%60 hareket hizi
+    HeadDetectionRangeCap    = 15.0,  -- metre
+    ArmAccuracyPenalty       = 0.50,  -- isabet dusuklugu (skill_chemistry/cyber etkin degerine uygulanir)
+    ArmPerfectCasingQuality  = 1.0,   -- kusursuz kovan kalitesi
+    TorsoCortisolLock        = 0.90,
+    TorsoAuditAnomalyMultiplier = 3.0, -- +%300
+    TorsoStashTheftGrams     = 10.0,
+
+    -- Kalıcı sakatlık eşiği (Katman 4): arm_injury/leg_injury bu değere
+    -- ULAŞTIĞINDA permanently_crippled=1 olur -- Trap House yataklarıyla
+    -- ARTIK ASLA iyileşmez.
+    CripplingThreshold        = 1.0,
+
+    -- Karaborsa Ameliyatı (Trap House tedavisi): bu süre boyunca bot
+    -- dispatch kabul edemez, sonunda (yalnızca KALICI OLMAYAN) uzuv
+    -- hasarları sıfırlanır.
+    TrapHouseTreatmentHours    = 12
+}
+
+Config.PermanentCrippling = {
+    ArmCraftingShootingPenalty = 0.90, -- -%90 (kalici)
+    LegMovementPenalty          = 0.90 -- -%90 (kalici)
+}
+
+-- ---------------------------------------------------------------------
+-- [KATMAN 4] HAYALET CERRAH (PHANTOM SURGEON) — 5 gizli yeraltı doktor
+-- koordinatı arasında, epoch-saat damgası sağlama toplamından türetilen
+-- (RNG YOK) 6 saatlik deterministik rotasyon.
+-- ---------------------------------------------------------------------
+Config.PhantomDoctor = {
+    Coords = {
+        vector3(-225.9, -1636.2, 33.7),
+        vector3(963.4, -155.9, 74.2),
+        vector3(-1596.8, -570.9, 108.8),
+        vector3(1224.6, -3212.4, 5.9),
+        vector3(-3172.8, 1085.6, 20.6)
+    },
+    RotationIntervalHours = 6,
+    SurgeryPrice          = 60000.0,
+    SurgeryHours           = 24,
+    -- Ameliyat sirasinda klinikte uretilen siber sizinti (en yakin trap
+    -- house'un cyber_leak_intensity'sine, MEVCUT Bureau formulune AYNI
+    -- birimle eklenir).
+    ClinicCyberLeakIntensity = 0.30,
+    -- Buro yogunlugu (matrix_bureau_intensity ConVar'i) bu esigi
+    -- GECERSE, ameliyat sirasinda federal bir baskin (MEVCUT
+    -- Matrix.Bureau.IssueRaid'in en yakin trap house'a) tetiklenir.
+    FederalStingIntensityThreshold = 1.5
+}
+
+-- ---------------------------------------------------------------------
+-- [KATMAN 5/6] DETERMİNİSTİK SATICI DAĞILIMI + PARÇALANMIŞ İSTİHBARAT
+-- ---------------------------------------------------------------------
+Config.VendorPool = {
+    SpawnCount            = 5,
+    PedModel               = 'g_m_y_streetdealer_01',
+    Scenario                = 'WORLD_HUMAN_STAND_IMPATIENT',
+    SpreadRadiusMeters     = 900.0, -- Los Santos merkezinden deterministik dagilim yaricapi
+
+    -- Dusman cete tarafindan finanse edilme esikleri (gang_loyalty,
+    -- oyuncunun kendi cetesine sadakat [0,1] olcegi -- DUSUK deger =
+    -- dusman finansmanli).
+    EnemyLoyaltyRefuseThreshold    = 0.25, -- bunun ALTINDA satis TAMAMEN reddedilir
+    EnemyLoyaltySabotageThreshold  = 0.45, -- bunun ALTINDA satilan silahlara gizli jam_accumulator ekiliir
+    SabotageJamAccumulatorSeed     = 0.55,
+
+    InterrogateCommand      = 'zorkullan',
+    InterrogateRadius       = 5.0,
+    -- fear_index vs "propaganda momentumu" (Matrix.Bureau.GetPropagandaMomentum,
+    -- ZATEN VAR OLAN) esik farki -- gecilirse allegiance flip olur.
+    InterrogateMomentumWeight = 0.20,
+    IntelLeakOnFlip           = 0.50,
+
+    ProsecutorBribeCommand      = 'savcitasaboteet',
+    ProsecutorGuiltReductionPct = 0.20,
+    ProsecutorCooldownMs         = 300000
+}
+
+Config.FragmentedIntel = {
+    GainPerAction        = 0.10, -- torbacilik/rusvet/dinleme basina
+    DiscoveredThreshold   = 1.0,
+    -- Karsi-istihbarat vetting: oyuncunun MEVCUT siber-isi metrigi
+    -- (server/bureau.lua trap house cyber_leak_intensity / CyberLeakMaxIntensity
+    -- orani -- ZATEN VAR OLAN heatmap, ikinci bir "heat" alani ICAT EDILMEZ)
+    -- bu esigi GECERSE satici/doktor islemi reddeder ve kontagi kilitler.
+    VettingHeatThreshold  = 0.80,
+
+    -- Sting: bir kurye botu cevrilince (InspectBustedBot/mole flag) o
+    -- kontak compromised=1 olur; oyuncu orada islem yapmaya DEVAM ederse
+    -- front company'nin denetim-uyarisi bu üstel oranla sicrar.
+    StingAuditExponentialMultiplier = 1.5 -- +%50
+}
+
+-- ---------------------------------------------------------------------
+-- [KATMAN 7] DÜŞMAN ÇETE MAHALLELERİ + SIFIR-TOPLAM YAĞMA + BALİSTİK
+-- SUÇ YÜKLEME (FRAME-UP)
+-- ---------------------------------------------------------------------
+Config.GangHoods = {
+    Hoods = {
+        { id = 1, label = 'Vagos Bolgesi - El Burro Heights',  coords = vector3(365.4, -2036.9, 21.0) },
+        { id = 2, label = 'Ballas Bolgesi - Strawberry',       coords = vector3(-99.7, -1655.9, 32.0) },
+        { id = 3, label = 'Marabunta Bolgesi - La Puerta',     coords = vector3(-767.8, -1508.6, 4.9) }
+    },
+
+    LootWindowSeconds            = 120,
+    PatrolCompoundTickSeconds    = 10,
+    PatrolCompoundFactor         = 1.25,  -- her tik +%25 bilesik
+
+    DestroyLootCommand           = 'depoyuyak',
+
+    -- Balistik Suc Yukleme: enemy'nin 'unknown suspect' ile arsivlenmis
+    -- silahlari yagmalanirken bu meta-etiketi alir; /namludegistir
+    -- KOSULMADAN yakalanirsa (Frisk, MEVCUT Config.Forensics.Frisk)
+    -- tasiyicinin AKTIF davasina (MEVCUT /davaac -> matrix_trial_records)
+    -- %100 Mahkumiyet Skoru olarak islenir.
+    FrameUpMetadataTag           = '[ORIGIN: BLOODY LOOT]'
 }
 
 return Config

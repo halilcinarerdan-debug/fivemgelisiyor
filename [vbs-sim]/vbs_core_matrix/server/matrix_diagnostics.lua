@@ -21,11 +21,20 @@
 -- varlığı + salt-okunur DB şema sorguları. Toplamı milisaniyeler içinde
 -- biter (gerçek talep buydu), SIFIR yan etki, onServerResourceStart'ta
 -- OTOMATİK ve /matrix_run_diagnostics ile MANUEL çalışır. (B) DERİN KATMAN
--- -- YALNIZCA elle '/matrix_run_diagnostics deep' ile, İKİ-FAZLI ÇIKIŞ
--- KÖPRÜSÜ'nü GERÇEKTEN bir kullan-at test botuyla uçtan uca kanıtlar,
--- ardından Matrix.RemoveBot ile TAMAMEN geri alır (aşağıda). ASLA otomatik
--- tetiklenmez -- bir GM'in bilerek çalıştırdığı, kısa ve geri alınabilir
--- bir eylemdir.
+-- -- İKİ-FAZLI ÇIKIŞ KÖPRÜSÜ'nü GERÇEKTEN bir kullan-at test botuyla uçtan
+-- uca kanıtlar, ardından Matrix.RemoveBot ile TAMAMEN geri alır (aşağıda).
+--
+-- ★★★ KATMAN 21 GÜNCELLEMESİ (GM emriyle BİLİNÇLİ olarak yukarıdaki "ASLA
+-- otomatik değil" kararını GEÇERSİZ KILAR): onServerResourceStart artık
+-- HER ZAMAN deep=true çalıştırır VE üç ek SimulationChecks stres testi
+-- (100 eşzamanlı async işlem, bot yara-ceza hassasiyeti, Hayalet Doktor
+-- 10k-epoch determinizmi -- bkz. aşağıda) otomatik olarak tetiklenir.
+-- Bunlardan biri assert ile başarısız olursa, Config.Diagnostics.
+-- AbortResourceOnSimulationFailure açıkken kaynağın kendi açılışı
+-- StopResource ile DURDURULUR (bkz. AbortResourceBoot). Bu, DB/inventory
+-- ön-koşulları (bkz. shared/config.lua Config.Diagnostics KURULUM notu)
+-- karşılanmadan devreye alınırsa kaynağı HER RESTART'TA kilitleyebilir --
+-- kasıtlı, geri alınabilir (config'ten kapatılabilir) bir tercihtir.
 --
 -- SIFIR RNG: her kontrol saf/deterministiktir -- aynı config + aynı DB
 -- durumu HER ZAMAN aynı raporu üretir.
@@ -287,6 +296,9 @@ local DbChecks = {
     end },
     { 'matrix_legal_plate_evidence tablosu mevcut (KATMAN 14)', function()
         return TableExists('matrix_legal_plate_evidence'), 'sql/matrix_financial_core.sql calistirildi mi?'
+    end },
+    { 'matrix_diagnostics_stress_log tablosu mevcut (KATMAN 21)', function()
+        return TableExists('matrix_diagnostics_stress_log'), 'sql/matrix_financial_core.sql calistirildi mi?'
     end }
 }
 
@@ -349,11 +361,196 @@ local function RunDeepExitBridgeCheck()
     return { name = 'DERIN: Cikis Koprusu uctan uca (Madde 1)', passed = bridgedOk, detail = tostring(reason) }
 end
 
+
+-- =====================================================================
+-- ★ KATMAN 21: ACIMASIZ DIAGNOSTICS LABORATUVARI -- 3 CANLI ASENKRON
+-- STRES-TESTI SIMULASYONU. Her fonksiyon RunCheck ile SARILIR (yukaridaki
+-- FastChecks/DbChecks ile AYNI mekanizma) -- icindeki bir `assert`
+-- basarisiz olursa RunCheck'in pcall'i onu YAKALAR ve passed=false olarak
+-- rapor eder; Run() daha sonra (yalnizca otomatik acilista, GM emriyle
+-- BILINCLI olarak) bunu AbortResourceBoot'a baglar. YALNIZCA deep=true
+-- ile calisir (Ne FastChecks ne DbChecks TETIKLENMEZ -- onlar HER ZAMAN
+-- hizli/yan-etkisiz kalir).
+-- =====================================================================
+
+-- [21.1] 100 eszamanli async "satis" (ox_inventory RemoveItem + MySQL
+-- transaction) -- ★ CANLI EKONOMIDEN IZOLE: gercek Matrix.Market.EvaluateSale
+-- yerine, kendine ait tani-yalnizca bir stash + matrix_diagnostics_stress_log
+-- tablosu kullanir (dosya basi KAPSAM KARARI'ndaki "canli ekonomiye test
+-- verisi sizdirma" ilkesiyle CELISMEMEK icin BILINCLI secim) -- ama GERCEK
+-- eszamanli RemoveItem + GERCEK MySQL.transaction.await calisir, sahte
+-- degildir. Race condition varsa (kayip/duplicate satir, eksik remove)
+-- assert firlatir.
+local function RunConcurrencyStressCheck()
+    local stashId      = Config.Diagnostics.StressTestStashId or 'matrix_diagnostics_stress_stash'
+    local testItem      = Config.Diagnostics.StressTestItem or 'matrix_diagnostic_token'
+    local concurrency   = Config.Diagnostics.StressTestConcurrency or 100
+    local timeoutMs      = Config.Diagnostics.StressTestTimeoutMs or 15000
+    local runToken       = ('BOOT-%d'):format(GetGameTimer())
+
+    local regOk = pcall(function()
+        exports.ox_inventory:RegisterStash(stashId, 'DIAGNOSTICS STRESS STASH', concurrency + 10, 1000000, false)
+    end)
+    local seedOk = pcall(function()
+        exports.ox_inventory:AddItem(stashId, testItem, concurrency)
+    end)
+    assert(regOk, 'ox_inventory:RegisterStash basarisiz -- stres testi stash\'i kurulamadi')
+    assert(seedOk, ('ox_inventory:AddItem basarisiz -- "%s" item\'i SERVER\'DA KAYITLI DEGIL mi? (Config.Diagnostics.StressTestItem gercek bir item\'a ayarlanmali)'):format(testItem))
+
+    local pending = concurrency
+    for i = 1, concurrency do
+        CreateThread(function()
+            local removeOk, removeResult = pcall(function()
+                return exports.ox_inventory:RemoveItem(stashId, testItem, 1)
+            end)
+            local removedFlag = (removeOk and removeResult) and 1 or 0
+
+            pcall(function()
+                MySQL.transaction.await({
+                    {
+                        query  = 'INSERT INTO matrix_diagnostics_stress_log (run_token, worker_index, removed_ok) VALUES (?, ?, ?)',
+                        values = { runToken, i, removedFlag }
+                    }
+                })
+            end)
+
+            pending = pending - 1
+        end)
+    end
+
+    local waitedMs = 0
+    while pending > 0 and waitedMs < timeoutMs do
+        Wait(50)
+        waitedMs = waitedMs + 50
+    end
+    assert(pending == 0, ('%d/%d worker zaman asimina ugradi (%dms) -- eszamanlilik kilitlenmesi supheli'):format(pending, concurrency, timeoutMs))
+
+    local rows = MySQL.query.await(
+        'SELECT COUNT(*) AS cnt, COALESCE(SUM(removed_ok), 0) AS ok_sum FROM matrix_diagnostics_stress_log WHERE run_token = ?',
+        { runToken }
+    ) or {}
+    local cnt   = rows[1] and tonumber(rows[1].cnt) or 0
+    local okSum = rows[1] and tonumber(rows[1].ok_sum) or 0
+
+    -- Temizlik HER KOŞULDA (assert'ten ONCE) -- basarisiz test bile canli
+    -- DB'de kalici iz BIRAKMAZ.
+    pcall(function() MySQL.query.await('DELETE FROM matrix_diagnostics_stress_log WHERE run_token = ?', { runToken }) end)
+
+    assert(cnt == concurrency,
+        ('%d/%d satir DB\'ye ulasti -- kayip yazma = RACE CONDITION KANITI'):format(cnt, concurrency))
+    assert(okSum == concurrency,
+        ('%d/%d eszamanli RemoveItem basarisiz -- envanter yarisi supheli'):format(concurrency - okSum, concurrency))
+
+    return true, ('%d/%d eszamanli worker, %dms icinde, 0 kayip satir, 0 basarisiz remove'):format(concurrency, concurrency, waitedMs)
+end
+
+
+-- [21.2] Bot uzuv ceza carpanlarinin (hiz, tehdit algilama/Spotter
+-- Distance, denetim-anomali) formul hassasiyeti -- virgulden sonra 4
+-- hane. Test botlari GERCEK PickWoundZone determinizmine (botId+sayac,
+-- restart'lar arasi ONGORULEMEYEN auto-increment ID'ye bagli) DEGIL,
+-- forcedZone'a (bkz. server/wound_system.lua) dayanir -- boylece hangi
+-- bot ID'sinin verildigi FARK ETMEKSIZIN test FLAKY OLMAZ.
+local function RunWoundPrecisionSimCheck()
+    local trapHouseId = nil
+    for id in pairs(Matrix.TrapHouses or {}) do trapHouseId = id; break end
+    if not trapHouseId then
+        return true, 'atlandi -- Matrix.TrapHouses bos (henuz test edilecek bir trap house yok)'
+    end
+
+    local EPS = 0.00005 -- 4 hane hassasiyet esigi
+
+    local botA = Matrix.CreateBotRecord({ name = 'DIAGNOSTIC-WOUND-A', role = 'diagnostic_test', trap_house_id = trapHouseId })
+    assert(botA and botA.id, 'test bot A olusturulamadi')
+
+    Matrix.Wounds.ApplyBotRegionalDamage(botA.id, 1.0, 'leg')
+    local moveMult = Matrix.Wounds.GetMovementMultiplier(botA.id)
+    local expectedMove = 1.0 - (Config.BotWounds.LegSpeedPenalty or 0.60)
+    assert(type(moveMult) == 'number' and math.abs(moveMult - expectedMove) < EPS,
+        ('hareket carpani sapmasi: beklenen=%.4f gercek=%.4f'):format(expectedMove, moveMult or -1))
+
+    Matrix.Wounds.ApplyBotRegionalDamage(botA.id, 1.0, 'head')
+    local detCap = Matrix.Wounds.GetDetectionRangeCap(botA.id)
+    local expectedDet = Config.BotWounds.HeadDetectionRangeCap or 15.0
+    assert(type(detCap) == 'number' and math.abs(detCap - expectedDet) < EPS,
+        ('Spotter Distance sapmasi: beklenen=%.4f gercek=%.4f'):format(expectedDet, detCap or -1))
+
+    Matrix.Wounds.ApplyBotRegionalDamage(botA.id, 1.0, 'arm')
+    local accMult = Matrix.Wounds.GetAccuracyMultiplier(botA.id)
+    local expectedAcc = 1.0 - (Config.BotWounds.ArmAccuracyPenalty or 0.50)
+    assert(type(accMult) == 'number' and math.abs(accMult - expectedAcc) < EPS,
+        ('isabet carpani sapmasi: beklenen=%.4f gercek=%.4f'):format(expectedAcc, accMult or -1))
+
+    Matrix.RemoveBot(botA.id, 'retired')
+
+    -- Kalici sakatlik (crippled) yolu -- ayri bir bot: CripplingThreshold'a
+    -- (varsayilan 1.0) ulasana kadar ayni bolgeye (delta=0.25/vurus) 4 kez
+    -- vurulur.
+    local botB = Matrix.CreateBotRecord({ name = 'DIAGNOSTIC-WOUND-B', role = 'diagnostic_test', trap_house_id = trapHouseId })
+    assert(botB and botB.id, 'test bot B olusturulamadi')
+    for _ = 1, 4 do
+        Matrix.Wounds.ApplyBotRegionalDamage(botB.id, 1.0, 'leg')
+    end
+    local moveMultCrippled = Matrix.Wounds.GetMovementMultiplier(botB.id)
+    local expectedMoveCrippled = 1.0 - (Config.PermanentCrippling.LegMovementPenalty or 0.90)
+    assert(type(moveMultCrippled) == 'number' and math.abs(moveMultCrippled - expectedMoveCrippled) < EPS,
+        ('kalici sakatlik hareket carpani sapmasi: beklenen=%.4f gercek=%.4f'):format(expectedMoveCrippled, moveMultCrippled or -1))
+
+    Matrix.RemoveBot(botB.id, 'retired')
+
+    return true, ('bacak=%.4f algi=%.4f kol=%.4f kalici-bacak=%.4f'):format(moveMult, detCap, accMult, moveMultCrippled)
+end
+
+
+-- [21.3] Hayalet Doktor rotasyon formulunun (Matrix.Wounds.__ComputePhantomIndexForEpochBucket
+-- -- GERCEK uretim formulunun kendisi, bir kopyasi DEGIL) 10.000 epoch
+-- boyunca ileri VE geri (Bach "Yengec Kanonu" palindromu ruhuna uygun)
+-- calistirildiginda BIREBIR ayni sonucu urettigini kanitlar -- SIFIR RNG
+-- iddiasinin somut, olcelebilir kaniti. Salt-okunur/yan etkisiz.
+local function RunPhantomDoctorPalindromeSimCheck()
+    assert(type(Matrix.Wounds.__ComputePhantomIndexForEpochBucket) == 'function',
+        'Matrix.Wounds.__ComputePhantomIndexForEpochBucket tanimli degil')
+
+    local epochCount = Config.Diagnostics.PhantomPalindromeEpochCount or 10000
+    local forward = {}
+    for bucket = 0, epochCount - 1 do
+        forward[bucket] = Matrix.Wounds.__ComputePhantomIndexForEpochBucket(bucket)
+    end
+    for bucket = epochCount - 1, 0, -1 do
+        local idx = Matrix.Wounds.__ComputePhantomIndexForEpochBucket(bucket)
+        assert(idx == forward[bucket],
+            ('epoch #%d ileri/geri sapma -- DETERMINIZM IHLALI: ileri=%s geri=%s'):format(bucket, tostring(forward[bucket]), tostring(idx)))
+    end
+
+    return true, ('%d epoch, ileri+geri, BIREBIR ayni (palindrom dogrulandi)'):format(epochCount)
+end
+
+
+local SimulationChecks = {
+    { 'DERIN-SIM: 100 eszamanli async satis stres testi (KATMAN 21.1)',            RunConcurrencyStressCheck },
+    { 'DERIN-SIM: Bot yara ceza carpani 4-hane hassasiyeti (KATMAN 21.2)',          RunWoundPrecisionSimCheck },
+    { 'DERIN-SIM: Hayalet Doktor 10k-epoch palindrom determinizmi (KATMAN 21.3)',   RunPhantomDoctorPalindromeSimCheck }
+}
+
+
+-- ★ KATMAN 21: bir SimulationChecks testi otomatik acilista basarisiz
+-- olursa (ve Config.Diagnostics.AbortResourceOnSimulationFailure=true
+-- ise) kaynagin KENDI acilisini durdurur. Bu, FXServer'in TUMUNU
+-- cokertmez -- yalnizca bu resource'u StopResource ile durdurur (bir
+-- GM'in manuel `/matrix_run_diagnostics deep` calistirmasinda ASLA
+-- tetiklenmez, YALNIZCA onServerResourceStart otomatik yolunda).
+local function AbortResourceBoot(reason)
+    local msg = ('[KATMAN 21][KRITIK] Kaynak acilisi DURDURULUYOR -- %s'):format(tostring(reason))
+    Matrix.Log('DIAGNOSTICS', msg)
+    print(('^1[MATRIX:DIAGNOSTICS] %s^7'):format(msg))
+    StopResource(GetCurrentResourceName())
+end
+
 -- Matrix.Diagnostics.Run: kendi CreateThread'i içinde çalışır (MySQL.*
 -- .await çağrıları coroutine bağlamı GEREKTİRİR -- server/bureau.lua
 -- LoadLearningCore İLE AYNI disiplin), bu yüzden Run() top-level'dan da
 -- güvenle çağrılabilir.
-function Matrix.Diagnostics.Run(deep, replyTo)
+function Matrix.Diagnostics.Run(deep, replyTo, isAutoBoot)
     CreateThread(function()
         local startedAt = GetGameTimer()
         local checks = {}
@@ -379,6 +576,12 @@ function Matrix.Diagnostics.Run(deep, replyTo)
                     detail = ('HATA: %s'):format(tostring(deepResult))
                 }
             end
+
+            -- ★ KATMAN 21: 3 acimasiz stres-test simulasyonu -- YALNIZCA
+            -- deep=true iken (bkz. yukaridaki SimulationChecks tanimi).
+            for _, c in ipairs(SimulationChecks) do
+                checks[#checks + 1] = RunCheck(c[1], c[2])
+            end
         end
 
         local passed, failed = 0, 0
@@ -401,6 +604,22 @@ function Matrix.Diagnostics.Run(deep, replyTo)
             '[MATRIX RUN DIAGNOSTICS] %d/%d basarili (deep=%s) -- %dms icinde tamamlandi. Sonuc: %s',
             passed, #checks, tostring(lastReport.deep), lastReport.duration_ms,
             lastReport.sealed and 'MUHURLENDI (0 hata)' or ('%d HATA'):format(failed))
+
+        -- ★ KATMAN 21: otomatik acilista basarisiz kontrol varsa VE
+        -- AbortResourceOnSimulationFailure acikken, kaynagin acilisini
+        -- burada DURDURUYORUZ -- asagidaki replyTo/broadcast'e HIC
+        -- ulasmadan (StopResource zaten kaynagin geri kalanini durdurur).
+        if isAutoBoot and failed > 0 and Config.Diagnostics.AbortResourceOnSimulationFailure then
+            local firstFailure = nil
+            for _, c in ipairs(checks) do
+                if not c.passed then firstFailure = c; break end
+            end
+            AbortResourceBoot(('%d/%d kontrol basarisiz -- ilk hata: [%s] %s'):format(
+                failed, #checks,
+                firstFailure and firstFailure.name or '?',
+                firstFailure and firstFailure.detail or '?'))
+            return
+        end
 
         if replyTo then
             Reply(replyTo, ('%d/%d kontrol basarili (%dms). %s'):format(
@@ -434,9 +653,11 @@ end)
 AddEventHandler('onServerResourceStart', function(resourceName)
     if resourceName ~= GetCurrentResourceName() then return end
     if not (Config.Diagnostics and Config.Diagnostics.RunOnResourceStart) then return end
-    -- Otomatik acilis: HER ZAMAN hizli katman, ASLA deep (dosya basi
-    -- KAPSAM KARARI).
-    Matrix.Diagnostics.Run(false, nil)
+    -- ★ KATMAN 21: eski KAPSAM KARARI ("otomatik acilis HER ZAMAN hizli
+    -- katman, ASLA deep") bu GM emriyle BILINCLI olarak GECERSIZ KILINDI.
+    -- Artik HER acilista deep=true (SimulationChecks dahil) calisir;
+    -- isAutoBoot=true, basarisizlikta AbortResourceBoot yetkisi verir.
+    Matrix.Diagnostics.Run(true, nil, true)
 end)
 
 -- /matrix_run_diagnostics [deep] -- diger tum admin/test komutlariyla
